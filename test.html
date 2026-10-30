@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>MiniWebEngine test</title>
+<style>
+/* author stylesheet */
+body { background: #f4f4f0; color: #222; }
+h1 { color: #b00020; }
+.card { background: #fff; border: 2px solid #336; padding: 10px; margin: 12px 0; }
+.card h2 { color: #336; margin-top: 0; }
+#note { background: #ffe9a8; padding: 6px; text-align: center; }
+.wrap { max-width: 520px; margin: 0 auto; }
+.r { text-align: right; color: green; }
+span.hl { background: yellow; }
+</style>
+</head>
+<body>
+<h1>MiniWebEngine v0.1</h1>
+<p>A tiny <b>HTML</b> + <u>CSS</u> engine &amp; renderer. Links look like <a href="#">this link</a>, and text wraps automatically when the line gets too long for the viewport width.</p>
+<div class="card">
+  <h2>Card title</h2>
+  <p>Nested block with <span class="hl">highlighted</span> inline text.<br>Line two after a br.</p>
+  <ul><li>First item</li><li>Second item with <b>bold</b></li><li>Third</li></ul>
+</div>
+<p id="note">Centered note box (id selector, specificity wins)</p>
+<div class="wrap" style="border:1px solid #888;padding:8px">
+  <p class="r">Right aligned inside max-width wrap</p>
+  <p style="font-size:24px;color:rgb(0,100,200)">Inline style 24px &lt;rgb&gt;</p>
+</div>
+<hr>
+<p style="font-size:11px">Small text 11px: ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 !"#$%&'()*+,-./:;=?@[]^_{|}~</p>
+</body>
+</html>

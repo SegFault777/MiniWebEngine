@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            ldflags: -Wl,--gc-sections -s
+          - name: windows-x86_64
+            os: windows-latest
+            ldflags: -Wl,--gc-sections -s
+          - name: macos
+            os: macos-latest
+            ldflags: -Wl,-dead_strip
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (warnings enabled)
+        run: |
+          gcc --version || cc --version
+          cc -std=c99 -Wall -Wextra -Os -ffunction-sections -fdata-sections \
+             -fno-asynchronous-unwind-tables -fno-ident \
+             ${{ matrix.ldflags }} mwe.c -o mwe
+          ls -l mwe*
+
+      - name: Strip (macOS)
+        if: runner.os == 'macOS'
+        run: strip mwe
+
+      - name: Smoke test (render test.html)
+        run: |
+          ./mwe test.html out.bmp 800
+          test -s out.bmp
+          # BMP signature must be "BM"
+          head -c 2 out.bmp | grep -q '^BM$'
+          ls -l out.bmp
+
+      - name: Smoke test (malformed input must not crash)
+        run: |
+          printf 'plain <b>text</b> &#65; < 5 <unclosed' > bad.html
+          ./mwe bad.html bad.bmp 300
+          test -s bad.bmp
+
+      - name: Report binary size
+        run: |
+          size=$(wc -c < "$(ls mwe mwe.exe 2>/dev/null | head -n1)")
+          echo "### ${{ matrix.name }}: $size bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mwe-${{ matrix.name }}
+          path: |
+            mwe
+            mwe.exe
+            out.bmp
+          if-no-files-found: ignore
