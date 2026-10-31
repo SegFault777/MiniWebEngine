@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: ${{ matrix.name }}
+  engine:
+    name: engine + headless browser (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,46 +27,73 @@ jobs:
     defaults:
       run:
         shell: bash
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build (warnings enabled)
+      - name: Warn if the stand-in font is still embedded
         run: |
-          gcc --version || cc --version
+          if grep -q "STAND-IN" mwe_font.h; then
+            echo "::warning file=mwe_font.h::mwe_font.h is a stand-in font, not Inter. See fonts/README.md"
+          fi
+
+      - name: Build engine CLI
+        run: |
           cc -std=c99 -Wall -Wextra -Os -ffunction-sections -fdata-sections \
              -fno-asynchronous-unwind-tables -fno-ident \
              ${{ matrix.ldflags }} mwe.c -o mwe
           ls -l mwe*
 
-      - name: Strip (macOS)
-        if: runner.os == 'macOS'
-        run: strip mwe
-
-      - name: Smoke test (render test.html)
+      - name: Smoke test (render test.html and malformed input)
         run: |
           ./mwe test.html out.bmp 800
           test -s out.bmp
-          # BMP signature must be "BM"
           head -c 2 out.bmp | grep -q '^BM$'
-          ls -l out.bmp
-
-      - name: Smoke test (malformed input must not crash)
-        run: |
           printf 'plain <b>text</b> &#65; < 5 <unclosed' > bad.html
           ./mwe bad.html bad.bmp 300
           test -s bad.bmp
 
-      - name: Report binary size
+      - name: Build and test headless MiniBrowser
         run: |
-          size=$(wc -c < "$(ls mwe mwe.exe 2>/dev/null | head -n1)")
-          echo "### ${{ matrix.name }}: $size bytes" >> "$GITHUB_STEP_SUMMARY"
+          cc -std=gnu99 -Wall -Wextra -Os -DMWE_LIB \
+             mwe.c browser/minibrowser.c browser/mb_shot.c -o mb_shot
+          ./mb_shot about:home home.bmp 1000 640
+          ./mb_shot "$PWD/test.html" page.bmp 1000 640
+          test -s home.bmp && test -s page.bmp
+
+      - name: Report binary sizes
+        run: |
+          for f in mwe mwe.exe mb_shot mb_shot.exe; do
+            [ -f "$f" ] && echo "${{ matrix.name }} $f: $(wc -c < "$f") bytes" >> "$GITHUB_STEP_SUMMARY"
+          done
+          true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mwe-${{ matrix.name }}
+          name: engine-${{ matrix.name }}
           path: |
             mwe
             mwe.exe
-            out.bmp
+            home.bmp
+            page.bmp
           if-no-files-found: ignore
+
+  minibrowser-windows:
+    name: MiniBrowser (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build minibrowser.exe
+        run: |
+          gcc -std=gnu99 -Wall -Wextra -Os -s -ffunction-sections -fdata-sections \
+              -Wl,--gc-sections -DMWE_LIB -mwindows \
+              mwe.c browser/minibrowser.c browser/mb_win32.c \
+              -o minibrowser.exe -lws2_32 -lgdi32 -luser32
+          ls -l minibrowser.exe
+          echo "minibrowser.exe: $(wc -c < minibrowser.exe) bytes" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minibrowser-windows-x86_64
+          path: minibrowser.exe
