@@ -5,7 +5,7 @@
 
 A tiny, zero-dependency HTML + CSS rendering engine written in C99.
 
-**Current version: v0.2** &nbsp;(v0.1 used a built-in 5x7 bitmap font; v0.2 renders anti-aliased vector text from Inter outlines.)
+**Current version: v0.2_1** (v0.2 plus Windows build fixes) &nbsp;(v0.1 used a built-in 5x7 bitmap font; v0.2 renders anti-aliased vector text from Inter outlines.)
 
 MiniWebEngine parses HTML and CSS, lays the page out, rasterizes it with an
 embedded vector font, and either streams a BMP (CLI) or paints into your own

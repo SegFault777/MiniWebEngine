@@ -253,7 +253,8 @@ static N*parse(char*s,int n){
   if(seq(nm,"style")||seq(nm,"script")){
    ra=j;while(j<n&&!(s[j]=='<'&&j+2+nm.n<=n&&s[j+1]=='/'&&seqs((S){s+j+2,nm.n},nm)))j++;
    if(seq(nm,"style"))css((S){s+ra,j-ra});
-   while(j<n&&s[j]!='>')j++;j++;}
+   while(j<n&&s[j]!='>')j++;
+   j++;}
   else if(!sc&&!isvoid(nm)&&dp<200){cur=e;dp++;}
   i=j;}
  return rt;}
@@ -265,7 +266,10 @@ static void tgt(unsigned*b,int st,int x,int y,int w,int h){pb=b;pst=st;px0=x;py0
 static void fr(int x,int y,int w,int h,int c){
  int x1=x+w,y1=y+h,xx;
  if(c<0)return;
- if(x<kx0)x=kx0;if(y<ky0)y=ky0;if(x1>kx1)x1=kx1;if(y1>ky1)y1=ky1;
+ if(x<kx0)x=kx0;
+ if(y<ky0)y=ky0;
+ if(x1>kx1)x1=kx1;
+ if(y1>ky1)y1=ky1;
  for(;y<y1;y++)for(xx=x;xx<x1;xx++)pb[(y-py0)*pst+(xx-px0)]=c;}
 static void bl(int x,int y,int c,int a){
  unsigned*d,o;int r,g,b;
@@ -309,7 +313,10 @@ static void dl(float x0,float y0,float x1,float y1,int w,int h){
   lo=(float)y;if(lo<y0)lo=y0;
   dy-=lo;xn=x+dxdy*dy;d=dy*dir;
   if(x<xn){xa=x;xb=xn;}else{xa=xn;xb=x;}
-  if(xa<0)xa=0;if(xb<0)xb=0;if(xa>(float)w)xa=(float)w;if(xb>(float)w)xb=(float)w;
+  if(xa<0)xa=0;
+  if(xb<0)xb=0;
+  if(xa>(float)w)xa=(float)w;
+  if(xb>(float)w)xb=(float)w;
   x0i=(int)xa;fa=(float)x0i;
   x1i=(int)xb;cb=(float)x1i;if(cb<xb){cb+=1;x1i++;}
   if(x1i<=x0i+1){xm=0.5f*(x+xn)-fa;if(xm<0)xm=0;if(xm>1)xm=1;r[x0i]+=d-d*xm;r[x0i+1]+=d*xm;}
@@ -382,7 +389,9 @@ static void mt0(St*s,int*as,int*de){
 static void met(St*s,int*a,int*h){
  int as,de;
  mt0(s,&as,&de);*a=as;*h=as+de;
- if(as>LA)LA=as;if(de>LD)LD=de;LH=LA+LD;}
+ if(as>LA)LA=as;
+ if(de>LD)LD=de;
+ LH=LA+LD;}
 static void word(char*p,int n,N*e){
  St*s=&e->s;int fs=s->fs,b=s->bold,ww=wid(p,n,fs,b),spw=(sp&&LH)?(MF_ADV[b][0]*fs+512)>>10:0,a,h;Cmd*c;
  if(LH&&lx+spw+ww>cx+cw){nl();spw=0;}

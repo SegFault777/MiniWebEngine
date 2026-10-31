@@ -15,7 +15,8 @@ int main(int ac,char**av){
  int w=1000,h=640,i,x,y,rs;unsigned char hd[54]={'B','M'};FILE*f;
  if(ac<3){fprintf(stderr,"usage: mb_shot url out.bmp [w h] [--click X Y]\n");return 1;}
  if(ac>=5&&av[3][0]!='-'){w=num(av[3]);h=num(av[4]);}
- if(w<200||w>1600)w=1000;if(h<200||h>1200)h=640;
+ if(w<200||w>1600)w=1000;
+ if(h<200||h>1200)h=640;
  mb_init(av[1],w,h);
  for(i=3;i<ac;i++)if(av[i][0]=='-'&&i+2<ac){mb_move(num(av[i+1]),num(av[i+2]));mb_click(num(av[i+1]),num(av[i+2]));}
  mb_draw(px);

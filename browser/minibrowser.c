@@ -178,7 +178,8 @@ static void relayout(void){
  if(cw<32)cw=32;
  ph=mwe_layout(cw);
  mx=ph-chh;if(mx<0)mx=0;
- if(sy>mx)sy=mx;if(sy<0)sy=0;}
+ if(sy>mx)sy=mx;
+ if(sy<0)sy=0;}
 static void settitle(void){
  const char*t;int n;
  t=mwe_title(&n);
@@ -325,28 +326,29 @@ void mb_paste(const char*s,int n){
  ins(b,o);}
 void mb_key(int k){
  int chh=Ht-TB-SBH,mx=ph-chh,l,i;
- if(k==MB_FOCUS_URL){uf=1;usel=1;return;}
- if(k==MB_BACK){hgo(-1);return;}
- if(k==MB_FORWARD){hgo(1);return;}
- if(k==MB_F5){go(cur,0);return;}
+ if(k==MBK_FOCUS_URL){uf=1;usel=1;return;}
+ if(k==MBK_BACK){hgo(-1);return;}
+ if(k==MBK_FORWARD){hgo(1);return;}
+ if(k==MBK_F5){go(cur,0);return;}
  if(uf){
   l=len(ub);
-  if(k==MB_ENTER){uf=0;usel=0;go(ub,1);}
-  else if(k==MB_ESC){uf=0;usel=0;cpy(ub,UC,cur);ucur=len(ub);}
-  else if(k==MB_BACKSPACE){
+  if(k==MBK_ENTER){uf=0;usel=0;go(ub,1);}
+  else if(k==MBK_ESC){uf=0;usel=0;cpy(ub,UC,cur);ucur=len(ub);}
+  else if(k==MBK_BACKSPACE){
    if(usel){ub[0]=0;ucur=0;usel=0;}
    else if(ucur>0){i=ucur-1;while(i>0&&(ub[i]&0xC0)==0x80)i--;
     {int j;for(j=ucur;j<=l;j++)ub[i+j-ucur]=ub[j];}ucur=i;}}
-  else if(k==MB_DELETE){
+  else if(k==MBK_DELETE){
    if(usel){ub[0]=0;ucur=0;usel=0;}
    else if(ucur<l){i=ucur+1;while(ub[i]&&(ub[i]&0xC0)==0x80)i++;
     {int j;for(j=i;j<=l;j++)ub[ucur+j-i]=ub[j];}}}
-  else if(k==MB_LEFT){usel=0;if(ucur>0){ucur--;while(ucur>0&&(ub[ucur]&0xC0)==0x80)ucur--;}}
-  else if(k==MB_RIGHT){usel=0;if(ucur<l){ucur++;while(ub[ucur]&&(ub[ucur]&0xC0)==0x80)ucur++;}}
-  else if(k==MB_HOME){usel=0;ucur=0;}
-  else if(k==MB_END){usel=0;ucur=l;}
+  else if(k==MBK_LEFT){usel=0;if(ucur>0){ucur--;while(ucur>0&&(ub[ucur]&0xC0)==0x80)ucur--;}}
+  else if(k==MBK_RIGHT){usel=0;if(ucur<l){ucur++;while(ub[ucur]&&(ub[ucur]&0xC0)==0x80)ucur++;}}
+  else if(k==MBK_HOME){usel=0;ucur=0;}
+  else if(k==MBK_END){usel=0;ucur=l;}
   return;}
- if(k==MB_UP)sy-=48;else if(k==MB_DOWN)sy+=48;
- else if(k==MB_PGUP)sy-=chh-40;else if(k==MB_PGDN)sy+=chh-40;
- else if(k==MB_HOME)sy=0;else if(k==MB_END)sy=mx;
- if(sy>mx)sy=mx;if(sy<0)sy=0;}
+ if(k==MBK_UP)sy-=48;else if(k==MBK_DOWN)sy+=48;
+ else if(k==MBK_PGUP)sy-=chh-40;else if(k==MBK_PGDN)sy+=chh-40;
+ else if(k==MBK_HOME)sy=0;else if(k==MBK_END)sy=mx;
+ if(sy>mx)sy=mx;
+ if(sy<0)sy=0;}

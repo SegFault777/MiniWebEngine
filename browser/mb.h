@@ -12,8 +12,8 @@ void mb_plat_title(const char *utf8, int n);
 void mb_plat_cursor(int hand);
 
 /* ---- implemented by the core ---- */
-enum { MB_BACKSPACE = 1, MB_DELETE, MB_ENTER, MB_LEFT, MB_RIGHT, MB_HOME, MB_END,
-       MB_UP, MB_DOWN, MB_PGUP, MB_PGDN, MB_ESC, MB_F5, MB_FOCUS_URL, MB_BACK, MB_FORWARD };
+enum { MBK_BACKSPACE = 1, MBK_DELETE, MBK_ENTER, MBK_LEFT, MBK_RIGHT, MBK_HOME, MBK_END,
+       MBK_UP, MBK_DOWN, MBK_PGUP, MBK_PGDN, MBK_ESC, MBK_F5, MBK_FOCUS_URL, MBK_BACK, MBK_FORWARD };
 void mb_init(const char *start_url, int w, int h);
 void mb_resize(int w, int h);
 void mb_draw(unsigned *px);                 /* full window, w*h pixels, 0x00RRGGBB */

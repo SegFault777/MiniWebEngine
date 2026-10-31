@@ -99,11 +99,11 @@ static void paste(void){
  CloseClipboard();}
 static int vk2k(WPARAM v){
  switch(v){
-  case VK_BACK:return MB_BACKSPACE;case VK_DELETE:return MB_DELETE;case VK_RETURN:return MB_ENTER;
-  case VK_LEFT:return MB_LEFT;case VK_RIGHT:return MB_RIGHT;case VK_HOME:return MB_HOME;case VK_END:return MB_END;
-  case VK_UP:return MB_UP;case VK_DOWN:return MB_DOWN;case VK_PRIOR:return MB_PGUP;case VK_NEXT:return MB_PGDN;
-  case VK_ESCAPE:return MB_ESC;case VK_F5:return MB_F5;case VK_F6:return MB_FOCUS_URL;
-  case VK_BROWSER_BACK:return MB_BACK;case VK_BROWSER_FORWARD:return MB_FORWARD;}
+  case VK_BACK:return MBK_BACKSPACE;case VK_DELETE:return MBK_DELETE;case VK_RETURN:return MBK_ENTER;
+  case VK_LEFT:return MBK_LEFT;case VK_RIGHT:return MBK_RIGHT;case VK_HOME:return MBK_HOME;case VK_END:return MBK_END;
+  case VK_UP:return MBK_UP;case VK_DOWN:return MBK_DOWN;case VK_PRIOR:return MBK_PGUP;case VK_NEXT:return MBK_PGDN;
+  case VK_ESCAPE:return MBK_ESC;case VK_F5:return MBK_F5;case VK_F6:return MBK_FOCUS_URL;
+  case VK_BROWSER_BACK:return MBK_BACK;case VK_BROWSER_FORWARD:return MBK_FORWARD;}
  return 0;}
 static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){
  static unsigned hs;
@@ -132,14 +132,14 @@ static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){
    return 0;
   case WM_KEYDOWN:
    if(GetKeyState(VK_CONTROL)&0x8000){
-    if(w=='L')mb_key(MB_FOCUS_URL);else if(w=='R')mb_key(MB_F5);else if(w=='V')paste();
+    if(w=='L')mb_key(MBK_FOCUS_URL);else if(w=='R')mb_key(MBK_F5);else if(w=='V')paste();
     inval();return 0;}
    k=vk2k(w);
    if(k){mb_key(k);inval();}
    return 0;
   case WM_SYSKEYDOWN:
-   if(w==VK_LEFT){mb_key(MB_BACK);inval();return 0;}
-   if(w==VK_RIGHT){mb_key(MB_FORWARD);inval();return 0;}
+   if(w==VK_LEFT){mb_key(MBK_BACK);inval();return 0;}
+   if(w==VK_RIGHT){mb_key(MBK_FORWARD);inval();return 0;}
    break;
   case WM_DESTROY:PostQuitMessage(0);return 0;}
  return DefWindowProcW(h,m,w,l);}

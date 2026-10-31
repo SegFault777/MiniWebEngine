@@ -57,7 +57,13 @@ Alt+Left / Alt+Right back / forward, Up/Down/PgUp/PgDn/Home/End scroll.
 
 ## Status of this release
 
+**v0.2_1** fixes the Windows build of v0.2: the key-code enum used the prefix
+`MB_`, which collides with Win32 message-box macros (`MB_RIGHT`, `MB_HELP`, ...)
+from `winuser.h`; it is now `MBK_`. All `-Wmisleading-indentation` warnings were fixed too
+(the code builds with `-Wall -Wextra` warning-free).
+
 The portable core is exercised by the headless driver and a fake-network test
-(redirects, chunked bodies, link resolution) under ASan/UBSan. `mb_win32.c` was
-only syntax-checked against a stub of the Win32 API in the environment where
-v0.2 was written; it has not been run on Windows yet. CI builds it on a Windows runner.
+(redirects, chunked bodies, link resolution) under ASan/UBSan. The Win32 layer
+compiled on a real MinGW-w64 toolchain only up to the enum error above; after
+the fix it has been checked against a stub of the Win32 API, but it has not been
+run on Windows yet.
