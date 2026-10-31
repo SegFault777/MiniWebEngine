@@ -1,12 +1,45 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Headless MiniBrowser driver: renders the full browser window to a BMP.
- * Used for CI smoke tests and screenshots (no window system, no network).
+ * Used for CI smoke tests and screenshots (no window system). On Unix it has real sockets,
+ * so it can fetch http:// and https:// pages.
  * usage: mb_shot <url|path> out.bmp [width height] [--click X Y] */
 #include <stdio.h>
 #include "mb.h"
 static unsigned px[1600*1200];
 static unsigned char rb[1600*3+4];
-int mb_plat_http(const char*h,int p,const char*r,int rl,char*o,int c){(void)h;(void)p;(void)r;(void)rl;(void)o;(void)c;return -1;}
+#if defined(__unix__) || defined(__APPLE__)
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netdb.h>
+int mb_plat_open(const char*host,int port){
+ struct addrinfo hi,*res=0,*ai;char ps[16];int fd=-1;struct timeval tv;
+ memset(&hi,0,sizeof hi);hi.ai_family=AF_UNSPEC;hi.ai_socktype=SOCK_STREAM;
+ snprintf(ps,sizeof ps,"%d",port);
+ if(getaddrinfo(host,ps,&hi,&res))return -1;
+ tv.tv_sec=15;tv.tv_usec=0;
+ for(ai=res;ai;ai=ai->ai_next){
+  fd=socket(ai->ai_family,ai->ai_socktype,ai->ai_protocol);
+  if(fd<0)continue;
+  setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof tv);
+  if(connect(fd,ai->ai_addr,ai->ai_addrlen)==0)break;
+  close(fd);fd=-1;}
+ freeaddrinfo(res);return fd;}
+int mb_plat_send(int h,const void*b,int n){return (int)send(h,b,(size_t)n,0);}
+int mb_plat_recv(int h,void*b,int n){return (int)recv(h,b,(size_t)n,0);}
+void mb_plat_close(int h){close(h);}
+void mb_plat_random(unsigned char*b,int n){FILE*f=fopen("/dev/urandom","rb");if(!f||(int)fread(b,1,(size_t)n,f)!=n){fprintf(stderr,"no entropy source\n");_exit(9);}fclose(f);}
+long long mb_plat_time(void){return (long long)time(0);}
+#else
+int mb_plat_open(const char*h,int p){(void)h;(void)p;return -1;}
+int mb_plat_send(int h,const void*b,int n){(void)h;(void)b;(void)n;return -1;}
+int mb_plat_recv(int h,void*b,int n){(void)h;(void)b;(void)n;return -1;}
+void mb_plat_close(int h){(void)h;}
+void mb_plat_random(unsigned char*b,int n){(void)b;(void)n;}
+long long mb_plat_time(void){return 0;}
+#endif
 void mb_plat_title(const char*s,int n){fprintf(stderr,"title: %.*s\n",n,s);}
 void mb_plat_cursor(int h){(void)h;}
 static void pl(unsigned char*p,int v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}

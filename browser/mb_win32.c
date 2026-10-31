@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* MiniBrowser v0.2 - Win32 platform layer (window, input, sockets).
- * Only system DLLs are used: user32, gdi32, ws2_32 (+kernel32).
- * Build: gcc -std=gnu99 -Os -s -DMWE_LIB -mwindows mwe.c browser/minibrowser.c \
- *            browser/mb_win32.c -o minibrowser.exe -lws2_32 -lgdi32 -luser32 */
+ * Only system DLLs are used: user32, gdi32, ws2_32, advapi32 (+kernel32).
+ * Build: gcc -std=gnu11 -Os -s -DMWE_LIB -mwindows mwe.c browser/minibrowser.c \
+ *            browser/mb_tls.c browser/mb_win32.c -o minibrowser.exe -lws2_32 -lgdi32 -luser32 -ladvapi32 */
 #define WIN32_LEAN_AND_MEAN
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601
@@ -34,12 +34,26 @@ void mb_plat_title(const char *s, int n){
 void mb_plat_cursor(int h){
  hand=h;
  SetCursor(LoadCursor(NULL,h?IDC_HAND:IDC_ARROW));}
-int mb_plat_http(const char *host, int port, const char *req, int rl, char *out, int cap){
+#define MAXS 8
+static SOCKET sk[MAXS];
+/* RtlGenRandom: the system CSPRNG, exported by advapi32 under this name */
+BOOLEAN WINAPI SystemFunction036(PVOID buf, ULONG len);
+
+void mb_plat_random(unsigned char *b, int n){
+ if(n>0&&!SystemFunction036(b,(ULONG)n)){ /* never continue with predictable keys */
+  ExitProcess(9);}}
+long long mb_plat_time(void){
+ FILETIME ft;ULARGE_INTEGER u;
+ GetSystemTimeAsFileTime(&ft);
+ u.LowPart=ft.dwLowDateTime;u.HighPart=ft.dwHighDateTime;
+ return (long long)(u.QuadPart/10000000ULL)-11644473600LL;}
+int mb_plat_open(const char *host, int port){
  struct addrinfo hints,*res=NULL,*ai;
- char ps[16];
+ char ps[16],tmp[8];
  SOCKET s=INVALID_SOCKET;
- int n=0,r,k,tm=15000,pl=0;
- char tmp[8];
+ int r,k,tm=15000,pl=0,slot;
+ for(slot=0;slot<MAXS&&sk[slot]!=0&&sk[slot]!=INVALID_SOCKET;slot++);
+ if(slot==MAXS)return -1;
  if(port<=0||port>65535)port=80;
  k=port;
  do{tmp[pl++]=(char)('0'+k%10);k/=10;}while(k);
@@ -57,16 +71,21 @@ int mb_plat_http(const char *host, int port, const char *req, int rl, char *out,
   closesocket(s);s=INVALID_SOCKET;}
  freeaddrinfo(res);
  if(s==INVALID_SOCKET)return -1;
- for(r=0;r<rl;){
-  k=send(s,req+r,rl-r,0);
-  if(k<=0){closesocket(s);return -1;}
-  r+=k;}
- while(n<cap){
-  r=recv(s,out+n,cap-n,0);
-  if(r<=0)break;
-  n+=r;}
- closesocket(s);
- return n>0?n:-1;}
+ sk[slot]=s;
+ return slot;}
+int mb_plat_send(int h, const void *b, int n){
+ int k;
+ if(h<0||h>=MAXS||sk[h]==INVALID_SOCKET||sk[h]==0)return -1;
+ k=send(sk[h],(const char*)b,n,0);
+ return k==SOCKET_ERROR?-1:k;}
+int mb_plat_recv(int h, void *b, int n){
+ int k;
+ if(h<0||h>=MAXS||sk[h]==INVALID_SOCKET||sk[h]==0)return -1;
+ k=recv(sk[h],(char*)b,n,0);
+ return k==SOCKET_ERROR?-1:k;}
+void mb_plat_close(int h){
+ if(h<0||h>=MAXS||sk[h]==INVALID_SOCKET||sk[h]==0)return;
+ closesocket(sk[h]);sk[h]=INVALID_SOCKET;}
 
 /* ---- window ---- */
 static void mkdib(int w,int h){

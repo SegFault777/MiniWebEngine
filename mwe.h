@@ -2,7 +2,7 @@
 /* MiniWebEngine v0.2 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.2"
+#define MWE_VERSION "0.3-dev1"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */

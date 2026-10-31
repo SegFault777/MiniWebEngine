@@ -54,8 +54,8 @@ jobs:
 
       - name: Build and test headless MiniBrowser
         run: |
-          cc -std=gnu99 -Wall -Wextra -Os -DMWE_LIB \
-             mwe.c browser/minibrowser.c browser/mb_shot.c -o mb_shot
+          cc -std=gnu11 -Wall -Wextra -Os -DMWE_LIB \
+             mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_shot.c -o mb_shot
           ./mb_shot about:home home.bmp 1000 640
           ./mb_shot "$PWD/test.html" page.bmp 1000 640
           test -s home.bmp && test -s page.bmp
@@ -87,13 +87,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build minibrowser.exe
         run: |
-          gcc -std=gnu99 -Wall -Wextra -Os -s -ffunction-sections -fdata-sections \
+          gcc -std=gnu11 -Wall -Wextra -Os -s -ffunction-sections -fdata-sections \
               -Wl,--gc-sections -DMWE_LIB -mwindows \
-              mwe.c browser/minibrowser.c browser/mb_win32.c \
-              -o minibrowser.exe -lws2_32 -lgdi32 -luser32
+              mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_win32.c \
+              -o minibrowser.exe -lws2_32 -lgdi32 -luser32 -ladvapi32
           ls -l minibrowser.exe
           echo "minibrowser.exe: $(wc -c < minibrowser.exe) bytes" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: minibrowser-windows-x86_64
           path: minibrowser.exe
+
+  tls-e2e:
+    name: TLS end-to-end (openssl s_server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run browser/tests/tls_e2e.sh
+        run: bash browser/tests/tls_e2e.sh

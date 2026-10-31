@@ -20,7 +20,7 @@
 static char pg[PG+1],raw[1<<21];
 static char cur[UC],ub[UC],stt[UC],tmp[UC*2],req[UC*2];
 static char hist[32][512];static int hsy[32],hn,hi;
-static int Wd,Ht,sy,ph,plen,ucur,uf,usel,uoff,hov,ready;
+static int Wd,Ht,sy,ph,plen,ucur,uf,usel,uoff,hov,ready,sec; /* sec: 0 local page, 1 http, 2 https (verified) */
 
 /* ---- tiny string builder ---- */
 static char*bd_;static int bn_,bc_;
@@ -105,8 +105,8 @@ static const char HOME[]=
 "<li>Type an address such as http://example.com/ in the bar above and press Enter.</li>"
 "<li>Open a local page with file:///C:/path/to/page.html or a plain path.</li>"
 "<li>Ctrl+L focuses the address bar; Alt+Left / Alt+Right go back and forward; F5 reloads.</li></ul>"
-"<h2>Limits</h2><p class=k>No HTTPS (no TLS, to stay dependency-free), no images, no JavaScript, "
-"ASCII/Latin text only. Pages load synchronously.</p>"
+"<h2>Limits</h2><p class=k>No images, no JavaScript, ASCII/Latin text only. Pages load synchronously. "
+"HTTPS uses TLS 1.2 with certificate verification; there is no way to bypass a certificate error.</p>"
 "<p><a href=\"about:blank\">about:blank</a></p></body></html>";
 static int rdfile(const char*url){
  char p[UC];FILE*f;int n;
@@ -137,23 +137,39 @@ static int dechunk(char*b,int n){ /* in place */
   if(i<n&&b[i]=='\r')i++;
   if(i<n&&b[i]=='\n')i++;}
  return o;}
+static int netget(const char*host,int port,int tls,const char*rq,int rl,char*err,int ecap){
+ int n=0,r,h;
+ if(tls){
+  if(mb_tls_open(host,port)!=0){cpy(err,ecap,mb_tls_error());return -1;}
+  if(!mb_tls_send(rq,rl)){mb_tls_close();cpy(err,ecap,"Could not send the request.");return -1;}
+  while(n<(int)sizeof raw-1){r=mb_tls_recv(raw+n,(int)sizeof raw-1-n);if(r<=0)break;n+=r;}
+  mb_tls_close();
+  return n>0?n:-1;}
+ h=mb_plat_open(host,port);
+ if(h<0){cpy(err,ecap,"Could not connect to the server.");return -1;}
+ for(r=0;r<rl;){int k=mb_plat_send(h,rq+r,rl-r);if(k<=0){mb_plat_close(h);cpy(err,ecap,"Could not send the request.");return -1;}r+=k;}
+ while(n<(int)sizeof raw-1){r=mb_plat_recv(h,raw+n,(int)sizeof raw-1-n);if(r<=0)break;n+=r;}
+ mb_plat_close(h);
+ return n>0?n:-1;}
 static int http(char*url){
- int rd,n,i,port,st,he,bl,hl;char host[256],path[UC],loc[UC],tc[64],ct[96];const char*p;
+ int rd,n,i,port,st,he,bl,hl,tls;char host[256],path[UC],loc[UC],tc[64],ct[96],err[256];const char*p;
  for(rd=0;rd<6;rd++){
-  if(has(url,"https://")){errpage("HTTPS is not supported","MiniBrowser v" MB_VERSION " has no TLS (it is dependency-free). Use an http:// address or a local file.",url);return 0;}
-  p=url+7;i=0;port=80;
+  tls=has(url,"https://");
+  p=url+(tls?8:7);i=0;port=tls?443:80;
   while(*p&&*p!='/'&&*p!=':'&&*p!='?'&&*p!='#'&&i<255)host[i++]=*p++;
   host[i]=0;
   if(*p==':'){p++;port=0;while(dig(*p)){port=port*10+*p-'0';p++;}}
-  if(!host[0]){errpage("Invalid address","The address has no host name.",url);return 0;}
+  if(!host[0]||port<=0||port>65535){errpage("Invalid address","The address has no valid host name or port.",url);return 0;}
   bs(path,sizeof path);
   if(*p!='/')ba("/");
   while(*p&&*p!='#')bn(p++,1);
   bs(req,sizeof req);
   ba("GET ");ba(path);ba(" HTTP/1.1\r\nHost: ");ba(host);
+  if((tls&&port!=443)||(!tls&&port!=80)){char pb[8];int q=port,k=0,j;char t[8];while(q){t[k++]='0'+q%10;q/=10;}for(j=0;j<k;j++)pb[j]=t[k-1-j];pb[k]=0;ba(":");ba(pb);}
   ba("\r\nUser-Agent: MiniBrowser/" MB_VERSION " MiniWebEngine/" MWE_VERSION "\r\nAccept: text/html,text/plain;q=0.9,*/*;q=0.5\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
-  n=mb_plat_http(host,port,req,bn_,raw,(int)sizeof raw-1);
-  if(n<=0){errpage("Could not connect","The server did not respond. Check the address and your connection.",url);return 0;}
+  err[0]=0;
+  n=netget(host,port,tls,req,bn_,err,sizeof err);
+  if(n<=0){errpage(tls?"Secure connection failed":"Could not connect",err[0]?err:"The server did not respond. Check the address and your connection.",url);return 0;}
   raw[n]=0;
   for(he=0;he+3<n;he++)if(raw[he]=='\r'&&raw[he+1]=='\n'&&raw[he+2]=='\r'&&raw[he+3]=='\n')break;
   if(he+3>=n||!has(raw,"HTTP/")){errpage("Bad response","The server sent something that is not HTTP.",url);return 0;}
@@ -164,11 +180,13 @@ static int http(char*url){
   if(st>=300&&st<400&&hdr(raw,hl,"location:",loc,sizeof loc)&&loc[0]){resolve(url,loc,tmp,UC);cpy(url,UC,tmp);if(has(url,"http"))continue;errpage("Unsupported redirect","The server redirected to an unsupported address.",url);return 0;}
   p=raw+he+4;bl=n-he-4;
   if(hdr(raw,hl,"transfer-encoding:",tc,sizeof tc)&&has(tc,"chunked"))bl=dechunk((char*)p,bl);
+  if(hdr(raw,hl,"content-encoding:",tc,sizeof tc)&&tc[0]&&!has(tc,"identity")){
+   errpage("Unsupported content encoding","The server compressed the page, but this browser asked for an uncompressed one and cannot decode it.",url);return 0;}
   if(hdr(raw,hl,"content-type:",ct,sizeof ct)&&!has(ct,"text/")&&!has(ct,"application/xhtml")){
    errpage("Unsupported content","MiniBrowser can only display HTML and plain text.",url);return 0;}
   if(bl>PG)bl=PG;
   for(i=0;i<bl;i++)pg[i]=p[i];
-  pg[bl]=0;plen=bl;
+  pg[bl]=0;plen=bl;sec=tls?2:1;
   return 1;}
  errpage("Too many redirects","The server redirected too many times.",url);return 0;}
 
@@ -186,6 +204,7 @@ static void settitle(void){
  if(t&&n>0)mb_plat_title(t,n);else mb_plat_title(cur,len(cur));}
 static void load(char*url){
  int i;
+ sec=0;
  if(has(url,"about:")){
   if(has(url,"about:blank"))cpy(pg,PG,"<html><head><title>about:blank</title></head><body></body></html>");
   else cpy(pg,PG,HOME);
@@ -235,22 +254,28 @@ static void icons(unsigned*px){
   if(d>=30&&d<=52&&!(dx>0&&dy<0&&dx>=-dy*2/3&&dx<=-dy*3))fillr(px,cx+dx,cy+dy,1,1,on);}
  seg(px,cx+3,cy-8,cx+8,cy-8,on);seg(px,cx+8,cy-8,cx+8,cy-3,on);}
 static int caretx(int idx){return mwe_textw(ub,idx,14,0);}
+static const char*badge(void){return sec==2?"Secure":sec==1?"Not secure":"";}
+static int badgew(void){const char*b=badge();return b[0]?mwe_textw(b,len(b),12,1)+14:0;}
 void mb_draw(unsigned*px){
- int i,cw=Wd-SBW,chh=Ht-TB-SBH,bx=120,bw=Wd-bx-10,tx,cxp,th,ty,mx;
+ int i,cw=Wd-SBW,chh=Ht-TB-SBH,bx=120,bw=Wd-bx-10,tx,cxp,th,ty,mx,bwid,t0,av,sw;const char*bt;
  if(cw<32)cw=32;
  fillr(px,0,0,Wd,Ht,0xFFFFFF);
  fillr(px,0,0,Wd,TB,0xF1F3F4);fillr(px,0,TB-1,Wd,1,0xDADCE0);
  icons(px);
  /* address bar */
  fillr(px,bx,7,bw,TB-14,uf?0x1A73E8:0xDADCE0);fillr(px,bx+1,8,bw-2,TB-16,0xFFFFFF);
+ bwid=badgew();t0=bx+10+bwid;av=bw-20-bwid;
+ bt=badge();
+ if(bwid){mwe_text(px,Wd,Wd,Ht,bx+10,TB/2+4,bt,len(bt),12,1,sec==2?0x137333:0xB3261E,bx,bx+bw);fillr(px,t0-7,13,1,TB-26,0xDADCE0);}
  cxp=caretx(ucur);
- if(cxp-uoff>bw-24)uoff=cxp-(bw-24);
+ if(cxp-uoff>av-14)uoff=cxp-(av-14);
  if(cxp<uoff)uoff=cxp;
  if(uoff<0)uoff=0;
- tx=bx+10-uoff;
- if(uf&&usel)fillr(px,bx+10,11,mwe_textw(ub,len(ub),14,0)<bw-20?mwe_textw(ub,len(ub),14,0):bw-20,TB-22,0xC6DAFC);
- mwe_text(px,Wd,Wd,Ht,tx,TB/2+5,ub,len(ub),14,0,0x202124,bx+10,bx+bw-8);
- if(uf&&!usel)fillr(px,tx+cxp,12,1,TB-24,0x202124);
+ tx=t0-uoff;
+ sw=mwe_textw(ub,len(ub),14,0);
+ if(uf&&usel)fillr(px,t0,11,sw<av?sw:av,TB-22,0xC6DAFC);
+ mwe_text(px,Wd,Wd,Ht,tx,TB/2+5,ub,len(ub),14,0,0x202124,t0,bx+bw-8);
+ if(uf&&!usel&&tx+cxp>=t0)fillr(px,tx+cxp,12,1,TB-24,0x202124);
  /* content */
  if(chh>0){
   mwe_paint(px+TB*Wd,Wd,0,sy,cw,chh);
@@ -288,7 +313,7 @@ void mb_click(int x,int y){
   if(x>=120&&x<Wd-10){
    if(!uf){uf=1;usel=1;return;}
    usel=0;
-   x-=130-uoff;ucur=0;
+   x-=130+badgew()-uoff;ucur=0;
    for(i=0;ub[i];){
     a=i;i++;while((ub[i]&0xC0)==0x80)i++;
     b=mwe_textw(ub,i,14,0);
