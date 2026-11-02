@@ -2,7 +2,7 @@
 /* MiniWebEngine v0.2 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.3-dev1"
+#define MWE_VERSION "0.3-dev2"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -14,6 +14,14 @@ void mwe_paint(unsigned *buf, int stride, int x, int y, int w, int h);
 /* href under a document point (not NUL-terminated), or 0. */
 const char *mwe_link(int x, int y, int *len);
 const char *mwe_title(int *len);
+/* Viewport height in px (for vh units and fixed boxes); width comes from mwe_layout(). */
+void mwe_viewport_h(int h);
+/* Toggle a <details> if the point hits its <summary>. Returns 1 if the page changed (re-layout). */
+int  mwe_click(int x, int y);
+/* Linked stylesheets (<link rel=stylesheet href=...>): the host fetches them and passes the text
+ * back with mwe_add_css() (the buffer must stay valid); then call mwe_layout() again. */
+const char *mwe_stylesheet(int i, int *len);
+void mwe_add_css(char *css, int len);
 unsigned    mwe_bg(void);
 const char *mwe_font_name(void);
 

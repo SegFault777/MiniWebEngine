@@ -14,8 +14,9 @@ cp /path/to/Inter/OFL.txt fonts/OFL-Inter.txt   # keep Inter's own license text 
 ```
 
 Use the **static** Regular and Bold files, not the variable font. The generator
-embeds ASCII plus a few typographic characters (NBSP, curly quotes, dashes,
-bullet, ellipsis, arrow, euro, copyright, and similar). Inter has no Hangul/CJK glyphs.
+embeds ASCII, the Latin-1 Supplement (U+00A0-00FF) and common typographic characters (curly quotes,
+dashes, bullet, ellipsis, arrows, euro, trademark). Characters a font lacks are skipped with a
+warning and render as `?`. Inter has no Hangul/CJK glyphs.
 
 ## What the bundled `mwe_font.h` is
 

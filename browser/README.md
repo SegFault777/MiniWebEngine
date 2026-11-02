@@ -7,7 +7,7 @@ A small standalone desktop web browser built on [MiniWebEngine](../README.md).
 > is a separate project that runs as an ordinary desktop application and only
 > shares the "Mini" naming. The two have different code bases and different goals.
 
-**Version 0.3-dev1** (v0.3 in progress: HTTPS added; matches MiniWebEngine 0.3-dev1)
+**Version 0.3-dev2** (v0.3 in progress; matches MiniWebEngine 0.3-dev2)
 
 ## Features
 
@@ -17,6 +17,9 @@ A small standalone desktop web browser built on [MiniWebEngine](../README.md).
 - Address-bar security badge: **Secure** (verified TLS), **Not secure** (plain HTTP), none for local pages
 - `file://` URLs and plain paths, `about:home`, `about:blank`
 - Clickable links with relative URL resolution, hover URL in the status bar
+- External stylesheets (`<link rel=stylesheet>`, up to 8 / 256 KB) over file, HTTP or HTTPS
+- HTML5 / CSS3 rendering from the engine (flexbox, grid, tables, `@media` that follows the window size, ...)
+- `<details>` toggles on click
 - Mouse wheel, scrollbar, keyboard scrolling, page title in the window title
 
 ## HTTPS / TLS
@@ -36,7 +39,7 @@ and roots that are not in `tls/trusted_roots.h` (update that file to add or reti
 
 ## Not supported (yet)
 
-Images, JavaScript, forms, cookies, `#fragment` scrolling, non-Latin text, DPI scaling.
+Images, JavaScript, interactive forms (controls are drawn but not editable), cookies, `#fragment` scrolling, non-Latin text, DPI scaling.
 Pages load synchronously, so the window is unresponsive while a request is in flight.
 
 ## Layout
@@ -77,9 +80,8 @@ Alt+Left / Alt+Right back / forward, Up/Down/PgUp/PgDn/Home/End scroll.
 
 ## Status of this release
 
-**0.3-dev1** adds HTTPS. The TLS stack passes `tests/tls_e2e.sh` (RSA and ECDSA certificates,
-AES-128/256-GCM, X25519/P-256/P-384, TLS 1.3 fallback, and five must-refuse cases: wrong host name,
-untrusted CA, TLS-1.3-only server, no common cipher) and a 150 KB / 400 KB / chunked page run under
-ASan/UBSan. It has not been tried against public web sites from the build environment (no network there).
-`mb_win32.c` has been syntax-checked against a stub of the Win32 API but has not been run on Windows yet;
-CI builds it on a Windows runner.
+**0.3-dev2** moves MiniBrowser to the dev2 engine (HTML5 / CSS3 subset), adds external stylesheets and
+`<details>` clicks, and keeps the TLS suite green (`tests/tls_e2e.sh`, 11 cases). The engine was fuzzed
+under ASan/UBSan. `mb_win32.c` has been syntax-checked against a stub of the Win32 API but has not been
+run on Windows yet; CI builds it on a Windows runner. No public web site has been tried from the build
+environment (no network there).

@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.3-dev1"
+#define MB_VERSION "0.3-dev2"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* A blocking TCP socket with a receive timeout (about 15 s). */

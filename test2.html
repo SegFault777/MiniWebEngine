@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MiniWebEngine dev2 feature test</title>
+<style>
+:root { --accent: #0b57d0; --gap: 12px; --radius: 8px; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: #f6f7f9; color: #1f2328; max-width: 960px; }
+h1 { margin: 0 0 4px; }
+.sub { color: #57606a; margin: 0 0 var(--gap); }
+.row { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
+.card { flex: 1; background: #fff; border: 1px solid #d0d7de; border-radius: var(--radius); padding: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+.card h3 { margin: 0 0 6px; color: var(--accent); }
+.grad { height: 60px; border-radius: 10px; background: linear-gradient(to right, #0b57d0, #8e44ad 60%, #e74c3c); color: #fff; padding: 8px 12px; font-weight: bold; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; }
+.badge.red { background: #cf222e; }
+ul.sel li:first-child { font-weight: bold; }
+ul.sel li:nth-child(even) { color: #8250df; }
+ul.sel li:last-child::after { content: " (last)"; color: #888; }
+a[href^="http"]::after { content: " \2192"; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: var(--gap) 0; }
+.grid div { background: #dff0ff; padding: 8px; border-radius: 4px; }
+.grid .wide { grid-column: span 2; background: #ffe9a8; }
+table { border-collapse: collapse; width: 100%; background: #fff; margin: var(--gap) 0; }
+th, td { border: 1px solid #c9d1d9; padding: 6px 10px; text-align: left; }
+thead th { background: #eaeef2; }
+tr:nth-child(even) td { background: #f6f8fa; }
+.float-box { float: right; width: 140px; background: #ffe0e0; border: 1px solid #e0a0a0; padding: 6px; margin: 0 0 8px 12px; border-radius: 6px; }
+.clear { clear: both; }
+.pre { white-space: pre; background: #272822; color: #f8f8f2; padding: 8px; border-radius: 4px; }
+.w { width: calc(100% - 40px); margin: 0 auto; background: #ddd; text-align: center; }
+@media (max-width: 600px) { .row { flex-direction: column; } }
+@media (min-width: 601px) { .only-wide { display: block; } }
+.only-wide { display: none; background: #d4edda; padding: 6px; }
+.upper { text-transform: uppercase; letter-spacing: 2px; }
+.rel { position: relative; top: 4px; left: 8px; background: #fff3cd; display: inline-block; padding: 2px 6px; }
+.box { position: relative; height: 70px; background: #e8e8f8; border-radius: 6px; margin: 8px 0; }
+.box .abs { position: absolute; right: 8px; bottom: 6px; background: #333; color: #fff; padding: 2px 8px; border-radius: 4px; }
+.op { opacity: .45; background: #cf222e; color: #fff; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<h1>dev2 feature test</h1>
+<p class="sub">Flexbox, grid, tables, floats, <em>italic</em>, <del>deleted</del>, H<sub>2</sub>O, x<sup>2</sup>, and more.</p>
+
+<div class="row">
+  <div class="card"><h3>Selectors</h3>
+    <ul class="sel"><li>First item</li><li>Second item</li><li>Third item</li><li>Fourth item</li></ul>
+    <p>Link: <a href="http://example.org/">example.org</a> and <a href="/local">local</a></p></div>
+  <div class="card"><h3>Ordered</h3>
+    <ol start="3"><li>Three</li><li>Four</li><li>Five</li></ol>
+    <ol type="a"><li>alpha</li><li>beta</li></ol></div>
+  <div class="card"><h3>Badges</h3>
+    <span class="badge">new</span> <span class="badge red">hot</span> <span class="badge">v0.3</span>
+    <p class="upper">uppercase text</p></div>
+</div>
+
+<div class="grad">linear-gradient + radius</div>
+
+<div class="grid"><div>1</div><div>2</div><div>3</div><div class="wide">wide (span 2)</div><div>5</div><div>6</div></div>
+
+<table>
+<thead><tr><th>Name</th><th>Role</th><th>Score</th></tr></thead>
+<tbody>
+<tr><td>Ada</td><td>Engineer</td><td>98</td></tr>
+<tr><td>Grace</td><td>Admiral</td><td>95</td></tr>
+<tr><td colspan="2">Linus (colspan 2)</td><td>91</td></tr>
+</tbody></table>
+
+<div class="float-box">Float right box with text beside it</div>
+<p>This paragraph wraps around the floated box on its left. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+<div class="clear"></div>
+
+<div class="pre">line one
+  indented line two
+line three</div>
+<div class="w">calc(100% - 40px) centered</div>
+<div class="only-wide">visible only when viewport is wider than 600px (@media)</div>
+<div class="box"><span class="rel">relative</span><span class="abs">absolute bottom-right</span></div>
+<p class="op">opacity .45</p>
+<details><summary>Click to expand (closed)</summary><p>Hidden details content</p></details>
+<details open><summary>Open details</summary><p>Visible details content</p></details>
+<p><input type="text" placeholder="placeholder text"> <input type="text" value="value"> <button>Button</button> <input type="checkbox" checked> <input type="radio"> <select><option>First option</option><option>Second</option></select></p>
+</body>
+</html>

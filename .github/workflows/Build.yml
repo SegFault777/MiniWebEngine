@@ -46,7 +46,8 @@ jobs:
       - name: Smoke test (render test.html and malformed input)
         run: |
           ./mwe test.html out.bmp 800
-          test -s out.bmp
+          ./mwe test2.html out2.bmp 960
+          test -s out.bmp && test -s out2.bmp
           head -c 2 out.bmp | grep -q '^BM$'
           printf 'plain <b>text</b> &#65; < 5 <unclosed' > bad.html
           ./mwe bad.html bad.bmp 300
@@ -58,7 +59,8 @@ jobs:
              mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_shot.c -o mb_shot
           ./mb_shot about:home home.bmp 1000 640
           ./mb_shot "$PWD/test.html" page.bmp 1000 640
-          test -s home.bmp && test -s page.bmp
+          ./mb_shot "$PWD/browser/tests/pages/ext.html" ext.bmp 900 520
+          test -s home.bmp && test -s page.bmp && test -s ext.bmp
 
       - name: Report binary sizes
         run: |

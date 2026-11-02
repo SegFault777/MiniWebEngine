@@ -1,0 +1,4 @@
+body { font-family: sans-serif; background: #fffbe6; }
+h1 { color: #b00020; border-bottom: 3px solid #b00020; padding-bottom: 4px; }
+.tag { display: inline-block; background: #0b57d0; color: #fff; padding: 2px 10px; border-radius: 12px; }
+@media (max-width: 500px) { h1 { color: green; } }
