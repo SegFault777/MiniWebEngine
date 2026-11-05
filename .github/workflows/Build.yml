@@ -53,6 +53,9 @@ jobs:
           ./mwe bad.html bad.bmp 300
           test -s bad.bmp
 
+      - name: JavaScript regression tests
+        run: sh tests/js/run.sh
+
       - name: Build and test headless MiniBrowser
         run: |
           cc -std=gnu11 -Wall -Wextra -Os -DMWE_LIB \
@@ -60,7 +63,8 @@ jobs:
           ./mb_shot about:home home.bmp 1000 640
           ./mb_shot "$PWD/test.html" page.bmp 1000 640
           ./mb_shot "$PWD/browser/tests/pages/ext.html" ext.bmp 900 520
-          test -s home.bmp && test -s page.bmp && test -s ext.bmp
+          ./mb_shot "$PWD/browser/tests/pages/js_demo.html" js.bmp 800 520 --wait 300 --click 70 190 --click 70 190 --wait 100
+          test -s home.bmp && test -s page.bmp && test -s ext.bmp && test -s js.bmp
 
       - name: Report binary sizes
         run: |
@@ -77,6 +81,7 @@ jobs:
             mwe.exe
             home.bmp
             page.bmp
+            js.bmp
           if-no-files-found: ignore
 
   minibrowser-windows:
@@ -92,6 +97,7 @@ jobs:
           gcc -std=gnu11 -Wall -Wextra -Os -s -ffunction-sections -fdata-sections \
               -Wl,--gc-sections -DMWE_LIB -mwindows \
               mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_win32.c \
+              -Wl,--stack,8388608 \
               -o minibrowser.exe -lws2_32 -lgdi32 -luser32 -ladvapi32
           ls -l minibrowser.exe
           echo "minibrowser.exe: $(wc -c < minibrowser.exe) bytes" >> "$GITHUB_STEP_SUMMARY"

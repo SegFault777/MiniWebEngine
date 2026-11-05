@@ -2,8 +2,9 @@
 /* Headless MiniBrowser driver: renders the full browser window to a BMP.
  * Used for CI smoke tests and screenshots (no window system). On Unix it has real sockets,
  * so it can fetch http:// and https:// pages.
- * usage: mb_shot <url|path> out.bmp [width height] [--click X Y] */
+ * usage: mb_shot <url|path> out.bmp [width height] [--click X Y] [--wait MS] [--key C] (options run in order) */
 #include <stdio.h>
+#include <string.h>
 #include "mb.h"
 static unsigned px[1600*1200];
 static unsigned char rb[1600*3+4];
@@ -40,6 +41,10 @@ void mb_plat_close(int h){(void)h;}
 void mb_plat_random(unsigned char*b,int n){(void)b;(void)n;}
 long long mb_plat_time(void){return 0;}
 #endif
+static long long vms;
+long long mb_plat_ms(void){return vms;}
+void mb_plat_alert(const char*s,int n){fprintf(stderr,"alert: %.*s\n",n,s);}
+void mb_plat_log(const char*s,int n){fprintf(stderr,"console: %.*s",n,s);}
 void mb_plat_title(const char*s,int n){fprintf(stderr,"title: %.*s\n",n,s);}
 void mb_plat_cursor(int h){(void)h;}
 static void pl(unsigned char*p,int v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
@@ -51,7 +56,10 @@ int main(int ac,char**av){
  if(w<200||w>1600)w=1000;
  if(h<200||h>1200)h=640;
  mb_init(av[1],w,h);
- for(i=3;i<ac;i++)if(av[i][0]=='-'&&i+2<ac){mb_move(num(av[i+1]),num(av[i+2]));mb_click(num(av[i+1]),num(av[i+2]));}
+ for(i=3;i<ac;i++){
+  if(av[i][0]=='-'&&av[i][1]=='-'&&av[i][2]=='c'&&i+2<ac){mb_move(num(av[i+1]),num(av[i+2]));mb_click(num(av[i+1]),num(av[i+2]));}
+  else if(!strcmp(av[i],"--wait")&&i+1<ac){int t,ms=num(av[i+1]);for(t=0;t<ms;t+=16){vms+=16;mb_tick();}}
+  else if(!strcmp(av[i],"--key")&&i+1<ac){mb_char(av[i+1][0]);}}
  mb_draw(px);
  if(!(f=fopen(av[2],"wb")))return 2;
  rs=(w*3+3)&~3;

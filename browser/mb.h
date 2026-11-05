@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.3-dev2"
+#define MB_VERSION "0.3-dev3"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* A blocking TCP socket with a receive timeout (about 15 s). */
@@ -12,6 +12,9 @@ int  mb_plat_recv(int h, void *buf, int n);             /* >0 bytes; 0 closed; -
 void mb_plat_close(int h);
 void mb_plat_random(unsigned char *buf, int n);         /* cryptographically secure bytes */
 long long mb_plat_time(void);                           /* seconds since 1970-01-01 UTC */
+long long mb_plat_ms(void);                             /* monotonic milliseconds (timers) */
+void mb_plat_alert(const char *utf8, int n);            /* alert() from a script (may block) */
+void mb_plat_log(const char *utf8, int n);              /* console.log output (a debugger/stderr is fine) */
 void mb_plat_title(const char *utf8, int n);
 void mb_plat_cursor(int hand);
 
@@ -34,4 +37,5 @@ void mb_wheel(int notches);                 /* >0 scrolls up */
 void mb_key(int k);
 void mb_char(int codepoint);
 void mb_paste(const char *utf8, int n);
+int  mb_tick(void);                         /* call every ~16 ms: runs script timers; 1 = redraw needed */
 #endif

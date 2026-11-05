@@ -186,7 +186,7 @@ static int httpd(char*url,char*dst,int cap,int*olen,int page){
   if(hdr(raw,hl,"transfer-encoding:",tc,sizeof tc)&&has(tc,"chunked"))bl=dechunk((char*)p,bl);
   if(hdr(raw,hl,"content-encoding:",tc,sizeof tc)&&tc[0]&&!has(tc,"identity")){
    EP("Unsupported content encoding","The server compressed the page, but this browser asked for an uncompressed one and cannot decode it.",url);return 0;}
-  if(hdr(raw,hl,"content-type:",ct,sizeof ct)&&!has(ct,"text/")&&!has(ct,"application/xhtml")){
+  if(page&&hdr(raw,hl,"content-type:",ct,sizeof ct)&&!has(ct,"text/")&&!has(ct,"application/xhtml")){
    EP("Unsupported content","MiniBrowser can only display HTML and plain text.",url);return 0;}
   if(bl>cap-1)bl=cap-1;
   for(i=0;i<bl;i++)dst[i]=p[i];
@@ -207,9 +207,15 @@ static void relayout(void){
  if(sy>mx)sy=mx;
  if(sy<0)sy=0;}
 static void settitle(void){
- const char*t;int n;
+ static char lt[256];const char*t;int n,i,same=1;
  t=mwe_title(&n);
- if(t&&n>0)mb_plat_title(t,n);else mb_plat_title(cur,len(cur));}
+ if(!(t&&n>0)){t=cur;n=len(cur);}
+ if(n>255)n=255;
+ for(i=0;i<n;i++)if(lt[i]!=t[i])same=0;
+ if(same&&!lt[n])return;
+ for(i=0;i<n;i++)lt[i]=t[i];
+ lt[n]=0;
+ mb_plat_title(t,n);}
 static char csspool[1<<18];
 static void loadcss(void){ /* external stylesheets: <link rel=stylesheet href=...> (at most 8, 256 KB in total) */
  int i,n,used=0,l2;const char*h;char u[UC],full[UC];
@@ -227,8 +233,38 @@ static void loadcss(void){ /* external stylesheets: <link rel=stylesheet href=..
   else continue;
   mwe_add_css(csspool+used,l2);
   used+=l2+1;}}
+static char jspool[1<<20];
+static void go(const char*in,int push);
+static void loadjs(void){ /* external scripts: <script src=...> (at most 16, 1 MB in total) */
+ int i,n,used=0,l2;const char*h;char u[UC],full[UC];
+ for(i=0;i<16;i++){
+  h=mwe_script(i,&n);
+  if(!h)break;
+  if(n<=0||n>=UC)continue;
+  for(l2=0;l2<n;l2++)u[l2]=h[l2];
+  u[n]=0;
+  resolve(cur,u,full,UC);
+  if(used>=(int)sizeof jspool-2)break;
+  l2=0;
+  if(has(full,"file:")){if(!rdfiled(full,jspool+used,(int)sizeof jspool-used,&l2,0))continue;}
+  else if(has(full,"http")){if(!httpd(full,jspool+used,(int)sizeof jspool-used,&l2,0))continue;}
+  else continue;
+  mwe_add_js(i,jspool+used,l2);
+  used+=l2+1;}}
+static int navdepth,nloads;
+static void pump(void){ /* console output, alert() and location changes requested by scripts */
+ const char*t;int n;char u[UC],full[UC];
+ t=mwe_js_log(&n);
+ if(t&&n>0){mb_plat_log(t,n);mwe_js_log_clear();}
+ while((t=mwe_js_alert(&n))!=0)mb_plat_alert(t,n);
+ t=mwe_js_nav(&n);
+ if(t&&n>0&&n<UC&&navdepth<4){
+  int i;for(i=0;i<n;i++)u[i]=t[i];u[n]=0;
+  resolve(cur,u,full,UC);
+  navdepth++;go(full,1);navdepth--;}}
 static void load(char*url){
  int i;
+ nloads++;
  sec=0;
  if(has(url,"about:")){
   if(has(url,"about:blank"))cpy(pg,PG,"<html><head><title>about:blank</title></head><body></body></html>");
@@ -240,8 +276,18 @@ static void load(char*url){
  cpy(cur,UC,url);cpy(ub,UC,cur);ucur=len(ub);usel=0;uoff=0;
  mwe_load(pg,plen);ready=1;
  loadcss();
+ loadjs();
+ mwe_js_time(mb_plat_time()*1000LL,mb_plat_ms());mwe_js_url(cur);
+ mwe_js_run();
  sy=0;relayout();settitle();
- for(i=0;i<5;i++)stt[i]="Done"[i];}
+ for(i=0;i<5;i++)stt[i]="Done"[i];
+ pump();}
+int mb_tick(void){ /* called by the platform every ~16 ms; 1 = redraw needed */
+ int r=0;
+ if(!ready||!mwe_js_active())return 0;
+ if(mwe_js_tick(mb_plat_ms())){relayout();settitle();r=1;}
+ pump();
+ return r;}
 static void go(const char*in,int push){
  char u[UC];
  norm(in,u,sizeof u);
@@ -350,8 +396,14 @@ void mb_click(int x,int y){
  uf=0;
  if(x>=Wd-SBW&&y<Ht-SBH&&ph>chh){
   mx=ph-chh;sy=(y-TB)*mx/chh;if(sy<0)sy=0;if(sy>mx)sy=mx;return;}
- if(linkat(x,y,u)){if(u[0]=='#')return;go(u,1);}
- else if(x<Wd-SBW&&y>=TB&&y<Ht-SBH&&mwe_click(x,y-TB+sy))relayout();
+ {int hl=linkat(x,y,u),jr=0;
+  if(x<Wd-SBW&&y>=TB&&y<Ht-SBH){
+   jr=mwe_event_click(x,y-TB+sy);
+   if(jr&1){relayout();settitle();}
+   {int l0=nloads;pump();if(nloads!=l0)return;}}
+  if(jr&2)return;
+  if(hl){if(u[0]=='#')return;go(u,1);}
+  else if(x<Wd-SBW&&y>=TB&&y<Ht-SBH&&mwe_click(x,y-TB+sy))relayout();}
  return;}
 void mb_wheel(int n){
  int mx=ph-(Ht-TB-SBH);
@@ -364,7 +416,16 @@ static void ins(const char*s,int n){
  for(i=0;i<n;i++)ub[ucur+i]=s[i];
  ucur+=n;}
 void mb_char(int c){
- char b[4];int n;
+ char b[5];int n;
+ if(!uf&&c>=32&&c!=127&&ready){
+  if(c<0x80){b[0]=(char)c;n=1;}
+  else if(c<0x800){b[0]=(char)(0xC0|c>>6);b[1]=(char)(0x80|(c&63));n=2;}
+  else if(c<0x10000){b[0]=(char)(0xE0|c>>12);b[1]=(char)(0x80|(c>>6&63));b[2]=(char)(0x80|(c&63));n=3;}
+  else{b[0]=(char)(0xF0|c>>18);b[1]=(char)(0x80|(c>>12&63));b[2]=(char)(0x80|(c>>6&63));b[3]=(char)(0x80|(c&63));n=4;}
+  b[n]=0;
+  if(mwe_event_key("keydown",b)&1){relayout();}
+  pump();
+  return;}
  if(!uf||c<32||c==127)return;
  if(c<0x80){b[0]=c;n=1;}
  else if(c<0x800){b[0]=0xC0|c>>6;b[1]=0x80|(c&63);n=2;}
@@ -399,6 +460,10 @@ void mb_key(int k){
   else if(k==MBK_HOME){usel=0;ucur=0;}
   else if(k==MBK_END){usel=0;ucur=l;}
   return;}
+ if(ready){
+  const char*kn=k==MBK_ENTER?"Enter":k==MBK_LEFT?"ArrowLeft":k==MBK_RIGHT?"ArrowRight":k==MBK_UP?"ArrowUp":k==MBK_DOWN?"ArrowDown":
+   k==MBK_ESC?"Escape":k==MBK_BACKSPACE?"Backspace":k==MBK_DELETE?"Delete":k==MBK_HOME?"Home":k==MBK_END?"End":k==MBK_PGUP?"PageUp":k==MBK_PGDN?"PageDown":0;
+  if(kn){int r=mwe_event_key("keydown",kn);if(r&1)relayout();pump();if(r&2)return;}}
  if(k==MBK_UP)sy-=48;else if(k==MBK_DOWN)sy+=48;
  else if(k==MBK_PGUP)sy-=chh-40;else if(k==MBK_PGDN)sy+=chh-40;
  else if(k==MBK_HOME)sy=0;else if(k==MBK_END)sy=mx;

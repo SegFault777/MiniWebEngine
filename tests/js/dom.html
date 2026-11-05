@@ -1,0 +1,49 @@
+<html><body><div id="a"><span class="x">1</span><span class="x y">2</span><p>3</p></div>
+<script>
+var out=[];function L(){console.log.apply(console,arguments)}
+// closures in loops
+var fs=[];for(let i=0;i<3;i++)fs.push(()=>i);L(fs.map(f=>f()));
+var fv=[];for(var k=0;k<3;k++)fv.push(()=>k);L(fv.map(f=>f()));
+// this/bind/call
+function T(){return this.v}L(T.call({v:7}),T.bind({v:8})(),[1,2,3].reduce((a,b)=>a+b,0));
+// string methods
+L("a,b,c".split(","),"Hello".slice(1,-1),"abc".indexOf("c"),"x".padStart(3,"-"),"  t ".trim()+"|","abcabc".replace("b","X"),"abcabc".replaceAll("b","X"));
+L("한글테스트".length,"한글테스트".slice(1,3),"한글".charCodeAt(0));
+// numbers
+L(0.1*3,100/3,1e-7,123456789012345680000,(1234.5678).toFixed(2),parseInt("42px"),parseFloat("3.14abc"),Number("  12 "),Number("x"),5/0,-5/0,0/0);
+L(7%3,-7%3,2**-1,5>>1,-5>>>28,~5,1<<31,0.5+0.25,(255).toString(16),(0.5).toString(2));
+// typeof / equality
+L(typeof null,typeof [],typeof (()=>1),null==undefined,null===undefined,"1"==1,NaN==NaN,[]+[],[]+{},1+"2","3"*"4");
+// switch
+function sw(x){switch(x){case 1:return"one";case 2:case 3:return"two-three";default:return"other"}}L(sw(1),sw(3),sw(9));
+// getters in object literal skipped; spread
+L(Math.max(...[1,5,3]),[...[1,2],...[3]],{...{a:1},b:2});
+// optional chaining / nullish
+var o={a:{b:null}};L(o?.a?.b?.c,o.x?.y.z,o.a.b??"dflt",o.q?.(),0||"or",0??"nn");
+// array methods
+var arr=[5,3,8,1];L(arr.slice().sort((a,b)=>a-b),arr.indexOf(8),arr.includes(3),arr.findIndex(x=>x>5),arr.some(x=>x>7),arr.every(x=>x>0),arr.concat([9]),arr.reverse());
+arr.splice(1,2,"a","b","c");L(arr,arr.length);
+L(Array.from({length:3},(_, i)=>i*2),Array(3).fill(0),Array.isArray([]));
+// Date
+var d=new Date(2024,0,15,10,30);L(d.getFullYear(),d.getMonth(),d.getDate(),d.getDay(),d.toISOString());
+L(new Date(0).toISOString(),typeof Date.now());
+// try/finally ordering
+function tf(){try{return "t"}finally{L("fin")}}L(tf());
+// errors
+try{undefinedFn()}catch(e){L(e.name,e.message)}
+try{(void 0).x}catch(e){L(e.constructor===TypeError)}
+class E2 extends Error{constructor(m){super(m);this.name="E2"}}try{throw new E2("boom")}catch(e){L(e instanceof E2,e instanceof Error,e.message,String(e))}
+// recursion limit
+function rec(){return rec()}try{rec()}catch(e){L(e.name)}
+// DOM queries
+var a=document.getElementById("a");L(a.children.length,a.querySelectorAll(".x").length,a.querySelector("span.y").textContent,a.firstElementChild.nextElementSibling.className);
+L(document.querySelectorAll("div > span:first-child").length,a.querySelector("p").matches("div p"),a.querySelector("p").closest("#a")===a);
+a.querySelector("p").classList.add("z","w");L(a.querySelector("p").className,a.querySelector("p").classList.contains("z"));
+a.setAttribute("data-k","v");L(a.getAttribute("data-k"),a.dataset.k,a.hasAttribute("id"),a.getAttribute("nope"));
+a.insertAdjacentHTML("beforeend","<i>x</i>");L(a.lastElementChild.tagName,a.childNodes.length);
+var cl=a.cloneNode(true);L(cl.children.length,cl.id,cl.parentNode);
+a.removeChild(a.firstChild);L(a.children.length,a.firstElementChild.className);
+// event dispatch
+var hits=[];a.addEventListener("custom",e=>hits.push("a:"+e.detail));document.body.addEventListener("custom",e=>hits.push("body"));
+a.dispatchEvent(new CustomEvent("custom",{bubbles:true,detail:5}));L(hits);
+</script></body></html>

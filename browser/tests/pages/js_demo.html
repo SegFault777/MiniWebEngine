@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MiniBrowser JavaScript demo</title>
+<style>
+ body{font-family:sans-serif;margin:20px}
+ button{padding:8px 16px;font-size:16px}
+ #count{font-size:24px;margin:10px 0}
+ .todo{margin:4px 0}
+ .done{text-decoration:line-through;color:#888}
+</style>
+</head>
+<body>
+<h1>JavaScript demo</h1>
+<div id="count">...</div>
+<button id="b" onclick="clicks++;render();">Click me</button>
+<p id="clock"></p>
+<ul id="list"></ul>
+<script src="js_demo.js"></script>
+<script>
+  ["alpha", "beta", "gamma"].forEach(function (n, i) {
+    var li = document.createElement("li");
+    li.className = "todo";
+    li.textContent = (i + 1) + ". " + n.toUpperCase();
+    li.addEventListener("click", function () { li.classList.toggle("done"); });
+    document.getElementById("list").appendChild(li);
+  });
+</script>
+<noscript>JavaScript is off.</noscript>
+</body>
+</html>

@@ -31,6 +31,20 @@ void mb_plat_title(const char *s, int n){
  w[k++]=L'M';w[k++]=L'i';w[k++]=L'n';w[k++]=L'i';w[k++]=L'B';w[k++]=L'r';w[k++]=L'o';w[k++]=L'w';w[k++]=L's';w[k++]=L'e';w[k++]=L'r';
  w[k]=0;
  SetWindowTextW(hw,w);}
+long long mb_plat_ms(void){return (long long)GetTickCount64();}
+void mb_plat_alert(const char *s, int n){
+ WCHAR w[1200];int k;
+ if(n>1000)n=1000;
+ k=MultiByteToWideChar(CP_UTF8,0,s,n,w,1100);
+ if(k<0)k=0;
+ w[k]=0;
+ MessageBoxW(hw,w,L"MiniBrowser",MB_OK);}
+void mb_plat_log(const char *s, int n){
+ char b[1100];int k;
+ if(n>1000)n=1000;
+ for(k=0;k<n;k++)b[k]=s[k];
+ b[k]=0;
+ OutputDebugStringA(b);}
 void mb_plat_cursor(int h){
  hand=h;
  SetCursor(LoadCursor(NULL,h?IDC_HAND:IDC_ARROW));}
@@ -137,6 +151,7 @@ static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){
    EndPaint(h,&ps);
    return 0;}
   case WM_ERASEBKGND:return 1;
+  case WM_TIMER:if(mb_tick())inval();return 0;
   case WM_LBUTTONDOWN:mb_click((short)LOWORD(l),(short)HIWORD(l));inval();return 0;
   case WM_MOUSEMOVE:mb_move((short)LOWORD(l),(short)HIWORD(l));inval();return 0;
   case WM_MOUSEWHEEL:mb_wheel((short)HIWORD(w)/WHEEL_DELTA);inval();return 0;
@@ -178,6 +193,7 @@ int WINAPI WinMain(HINSTANCE hi,HINSTANCE hprev,LPSTR cmd,int show){
  hw=CreateWindowExW(0,L"MiniBrowserWnd",L"MiniBrowser",WS_OVERLAPPEDWINDOW|WS_VISIBLE,
   CW_USEDEFAULT,CW_USEDEFAULT,1100,760,NULL,NULL,hi,NULL);
  if(!hw)return 1;
+ SetTimer(hw,1,16,NULL);
  GetClientRect(hw,&r);
  mb_init(url,r.right,r.bottom);
  inval();

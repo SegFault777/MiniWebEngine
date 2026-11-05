@@ -5,20 +5,24 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.3-dev2** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
-`var()`, `calc()`, gradients, rounded corners, shadows). JavaScript is planned for v0.3-dev3.
+**Current version: v0.3-dev3** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+`var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
+interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
+events, timers).
 
 MiniWebEngine parses HTML and CSS, runs the cascade, lays the page out, rasterizes it with an
 embedded anti-aliased vector font, and either streams a BMP (CLI) or paints into your own pixel
 buffer (library). It is built around one goal: stay small and dependency-free.
 
 - **No external dependencies.** The engine source calls no libc function; only the optional CLI uses
-  `fopen`/`fread`/`fwrite`/`fclose`. No `malloc` (static arena), no `libm`. (Compilers may still emit
-  `memcpy`/`memset` for struct copies.)
-- Roughly 150 KB stripped on Linux (`-Os`), of which about 43 KB is font data for two weights
+  `fopen`/`fread`/`fwrite`/`fclose`. No `malloc` (static arena and a static JS heap), no `libm`.
+  (Compilers may still emit `memcpy`/`memmove`/`memset`/`strlen` for struct copies and loops.)
+- Roughly 275 KB stripped on Linux (`-Os`): about 43 KB of font data for two weights and about 130 KB
+  for the JavaScript engine. Static memory is large (about 70 MB of zero-initialized `.bss`: 16 MB
+  document arena + 24 MB JS heap + buffers) but pages are only touched when used
 - Library API in `mwe.h`; the same code backs the CLI and [MiniBrowser](browser/README.md)
 - Streaming CLI output: the page is rendered in 32-row bands, no full-size framebuffer
-- Fuzzed with ASan/UBSan (several thousand mutated pages, including hostile CSS values)
+- Fuzzed with ASan/UBSan (several thousand mutated pages and scripts, also with a GC-stress build)
 
 > **Naming note:** MiniWebEngine and MiniBrowser are separate from **MiniWeb**, the browser
 > built into the MiniWin operating system.
@@ -62,9 +66,22 @@ mwe_paint(pixels, stride, x, y, w, h);  /* render a document rect as 0x00RRGGBB 
 const char *href = mwe_link(x, y, &n);  /* link under a point, or NULL */
 mwe_click(x, y);                        /* toggles <details>; returns 1 if you must re-layout */
 mwe_stylesheet(i, &n); mwe_add_css(css, n);   /* host-side loading of <link rel=stylesheet> */
-```
 
-## Supported (v0.3-dev2)
+/* JavaScript (v0.3-dev3) */
+mwe_script(i, &n); mwe_add_js(i, text, n);    /* host-side loading of <script src=...> */
+mwe_js_time(unix_ms, mono_ms); mwe_js_url(url);
+if (mwe_js_run()) { /* scripts changed the page */ }   /* runs all scripts, DOMContentLoaded, load */
+int h = mwe_layout(w);                                    /* ...then lay out again */
+r = mwe_event_click(x, y);              /* mousedown/mouseup/click; bit0 = re-layout, bit1 = preventDefault() */
+mwe_event_key("keydown", "ArrowLeft");  /* key events go to <body> and bubble */
+mwe_js_tick(mono_ms);                   /* run due setTimeout/setInterval/requestAnimationFrame callbacks */
+mwe_js_log(&n);  mwe_js_alert(&n);  mwe_js_nav(&n);   /* console output, alert() text, location changes */
+```
+Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run()` is a no-op for pages
+without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
+fire), prints `console.log` output to stderr, and then renders.
+
+## Supported (v0.3-dev3)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),
@@ -98,9 +115,58 @@ spans, border-spacing, approximate border-collapse, vertical-align), `float` / `
 `text-transform`, `letter-spacing`, `white-space`, `line-height`, `vertical-align`, `list-style-type`
 (disc, circle, square, decimal, alpha, roman), bold, synthesized italic, underline, line-through.
 
+## JavaScript subset
+
+A tree-walking interpreter (`mwe_js.h`, included by `mwe.c`; about 3,900 lines) with a mark/sweep
+garbage collector (precise for heap objects, conservative for the C stack, so it can run in the
+middle of a script). Strings are UTF-8; `length`, indexing, `slice` and friends count code points
+(an astral character counts as 1, not 2). Numbers print exactly like V8 (shortest round-trip digits,
+exact `toFixed`); the regression tests compare against Node.js output.
+
+**Language** - `var`/`let`/`const` with block scoping and per-iteration `let` bindings, hoisting,
+functions, arrow functions, default / rest parameters, spread, destructuring (arrays, objects, defaults,
+rest, in declarations, parameters, `for...of` and assignments), template literals, classes (`extends`,
+`super`, static members, instance fields, getters and setters), object-literal getters / setters,
+closures, `this` / `bind` / `call` / `apply`, `new`, `instanceof`, `in`, `delete`, `typeof`, optional
+chaining, `??`, logical assignment, `**`, labels, `switch`, `try` / `catch` / `finally`, `for`,
+`for...in`, `for...of` (arrays, strings, `Map`, `Set`), comma operator, automatic semicolon insertion.
+
+**Built-ins** - `Object` (keys, values, entries, assign, create, defineProperty incl. accessors, ...),
+`Array` (30+ methods incl. `sort`, `flat`, `findLast`), `String` (incl. `padStart`, `replaceAll`, `at`,
+`localeCompare` by code point), `Number` (`toFixed`, `toPrecision`, `toExponential`, radix `toString`),
+`Math`, `JSON`, `Date` (UTC only), `Map` / `Set` / `WeakMap` / `WeakSet` (linear lookup), `Error` types,
+`RegExp`, `console`, `encodeURIComponent` / `decodeURIComponent`, `parseInt` / `parseFloat`,
+`structuredClone` (JSON-based), `localStorage` / `sessionStorage` (in memory), `performance.now`.
+
+**Regular expressions** - a backtracking matcher: classes, `\d\w\s\b`, groups (capturing, `(?:)`,
+named), alternation, greedy / lazy quantifiers, `{n,m}`, back-references, lookahead, flags `g i m s y`;
+`test`, `exec`, `match`, `matchAll`, `replace` (`$1`, `$&`, callbacks), `replaceAll`, `split`, `search`.
+Backtracking is capped, so catastrophic patterns fail instead of hanging.
+
+**DOM** - `document` (`getElementById`, `querySelector(All)` using the engine's own selector matcher,
+`createElement`, `createTextNode`, `createDocumentFragment`, `title`, `body`, ...), nodes (attributes,
+`id`, `className`, `classList`, `style.*` and `cssText`, `dataset`, `value`, `checked`, `innerHTML`,
+`outerHTML`, `textContent`, `insertAdjacentHTML`, tree navigation, `append` / `prepend` / `before` /
+`after` / `remove` / `replaceWith` / `cloneNode`, `matches` / `closest`, `getBoundingClientRect`,
+`offsetWidth` ...), `window` (`innerWidth`, timers, `getComputedStyle` for inline styles, `alert`),
+`location` (read, `href =`, `assign`, `reload`), events (`addEventListener`, `on*` properties **and
+inline `onclick="..."` attributes**, bubbling, `preventDefault`, `stopPropagation`, `Event`,
+`CustomEvent`, `dispatchEvent`), `setTimeout` / `setInterval` / `requestAnimationFrame`. A click that
+lands on an unchecked checkbox or radio button toggles it.
+
+**Safety** - a step budget (20 M steps per script, handler or timer callback) aborts runaway loops, the
+call depth is limited to 256, and running out of JS heap (24 MB) raises a `RangeError`. Uncaught
+errors are reported on the console output instead of stopping the page.
+
 ## Limitations
 
-- **No JavaScript** (planned for v0.3-dev3), no images or SVG, no `@font-face`, no `@import`
+- **JavaScript is a subset**: no `async` / `await`, `Promise`, generators, iterators / `Symbol`,
+  modules (`import` / `export`), `Proxy`, typed arrays, `eval`, `with`, lookbehind in regular
+  expressions, `fetch` / `XMLHttpRequest`, `Intl`, local-time `Date` (everything is UTC), tagged
+  templates, BigInt. Scripts that use them fail to parse and are skipped (a `SyntaxError` is logged).
+  `document.write` is a no-op, `<script>` elements created at run time are not executed, and
+  `dataset` / `style` are live views of the attributes but not enumerable
+- No images or SVG, no `@font-face`, no `@import`
 - Latin text only: Inter has no Hangul/CJK glyphs, so such characters render as `?`; no kerning, no
   monospace face (`pre` and `code` use the proportional font), no bidi / RTL
 - No transforms, transitions, animations, filters, `position: sticky`, `text-shadow`, `outline`,
@@ -119,10 +185,12 @@ engine (Win32 + a portable core) with HTTP and verified HTTPS (TLS 1.2). It is *
 ```
 mwe.c, mwe.h            engine (CLI when built without -DMWE_LIB) and its public API
 mwe_font.h              generated font data (see fonts/)
+mwe_js.h                JavaScript engine (included by mwe.c; not a separate translation unit)
 tools/genfont.py        TTF -> mwe_font.h converter (needs fonttools; build-time only)
+tests/                  JavaScript regression tests (`sh tests/js/run.sh`) and the jt.c event/timer driver
 fonts/                  font licenses and notes
 browser/                MiniBrowser (+ browser/tls: TLS 1.2 client and crypto)
-test.html, test2.html   sample pages (test2.html exercises the dev2 features)
+test.html, test2.html   sample pages (test2.html exercises the dev2 features; browser/tests/pages/js_demo.html the JS)
 .github/workflows/      CI (Linux, Windows, macOS)
 ```
 

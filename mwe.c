@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.3-dev2
+/* MiniWebEngine v0.3-dev3
  * Zero-dependency mini HTML5 + CSS3 engine: HTML parse -> selectors/cascade (@media, var(),
  * calc()) -> block / inline / flex / grid / table layout -> anti-aliased vector-font
  * rasterizer (outlines embedded as compact data, see tools/genfont.py) -> pixels.
@@ -31,7 +31,7 @@ typedef struct{
  S cont;
 }St;
 typedef struct N N;
-struct N{N*par,*kid,*last,*nx,*pv,*lel;S tag,txt,id,cls,sty,href,at;St*s;int det,gen,x0,y0,x1,y1;};
+struct N{N*par,*kid,*last,*nx,*pv,*lel;S tag,txt,id,cls,sty,href,at;St*s;int det,gen,x0,y0,x1,y1;void*jw;};
 
 /* ---- arena (no malloc) ---- */
 static long long ar[(1<<24)/8],dmy[64];
@@ -585,6 +585,9 @@ static void decl(St*s,S d,int pass){
   prop(s,k,v);}}
 
 /* ---- DOM + HTML parser ---- */
+#define JMAXSCR 64
+typedef struct{N*nd;int ext;S src;}JScr;
+static JScr jscr[JMAXSCR];static int jrec,jnscr;static void jrecscript(N*e);
 static N*root;static S ttl;static S sshref[16];static int nss;
 static N*nn(S tag){N*n=al(sizeof(N));n->tag=tag;return n;}
 static void add(N*p,N*n){
@@ -693,6 +696,7 @@ static N*parse(char*s,int n){
   if(seq(nm,"style")||seq(nm,"script")||seq(nm,"textarea")){
    ra=j;while(j<n&&!(s[j]=='<'&&j+2+nm.n<=n&&s[j+1]=='/'&&seqs((S){s+j+2,nm.n},nm)))j++;
    if(seq(nm,"style"))css((S){s+ra,j-ra});
+   else if(seq(nm,"script")){if(j>ra){x=nn((S){0,0});x->txt=(S){s+ra,j-ra};add(e,x);}if(jrec)jrecscript(e);}
    else if(seq(nm,"textarea")){
     if(ra<j&&s[ra]=='\n')ra++;
     t=dec((S){s+ra,j-ra});
@@ -929,7 +933,7 @@ static void sortrules(void){
 /* ---- user-agent stylesheet ---- */
 static const char UA[]=
 "html,body,div,p,h1,h2,h3,h4,h5,h6,ul,ol,li,hr,pre,blockquote,section,article,header,footer,nav,main,aside,form,fieldset,legend,figure,figcaption,address,dl,dt,dd,details,summary,hgroup,menu,dir,center,optgroup,caption,search{display:block}"
-"head,style,script,title,meta,link,base,template,noembed,area,datalist,param,source,track,svg,option,audio,colgroup,col,[hidden],dialog:not([open]),input[type=hidden]{display:none}"
+"head,style,script,noscript,title,meta,link,base,template,noembed,area,datalist,param,source,track,svg,option,audio,colgroup,col,[hidden],dialog:not([open]),input[type=hidden]{display:none}"
 "li{display:list-item}table{display:table;border-spacing:2px}tr{display:table-row}td,th{display:table-cell;padding:1px}thead,tbody,tfoot{display:table-row-group}"
 "body{margin:8px}p,dl,blockquote,figure,pre,ul,ol,menu,hgroup,fieldset{margin:1em 0}"
 "h1{font-size:2em;margin:.67em 0}h2{font-size:1.5em;margin:.83em 0}h3{font-size:1.17em;margin:1em 0}h4{margin:1.33em 0}h5{font-size:.83em;margin:1.67em 0}h6{font-size:.67em;margin:2.33em 0}"
@@ -1291,7 +1295,7 @@ static void ptri(int x,int y,int s,int dir,int c){ /* small solid triangle: dir 
  else{for(i=0;i<=s/2;i++){w=s-2*i;if(w>0)fr(x+i,y+i,w,1,c);}}}
 
 /* ---- layout state and paint list ---- */
-typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex;char*t,*hp;N*nd;}Cmd;
+typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex;char*t,*hp;N*nd,*on;}Cmd;
 static Cmd cm[MC],dm;
 static int nc,W,H,cv=0xffffff;
 static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp;
@@ -1300,10 +1304,11 @@ static int curop=255,curcl=0,isol,fw=-1,fh=-1,fva,fch=-1,ng,ibA[64];
 typedef struct{int x,y,w,h,side;}Fl;static Fl fls[64];static int nf;
 typedef struct{int x0,y0,x1,y1,par;}Clp;static Clp clps[512];static int nclp;
 typedef struct{N*n,*cb;int sx,sy;}Ab;static Ab abq[64];static int nab;
+static N*curn;
 static Cmd*cadd(int k,int x,int y,int w,int h,int c){
  Cmd*p=nc<MC?&cm[nc++]:&dm;
  p->k=k;p->x=x;p->y=y;p->w=w;p->h=h;p->a=0;p->c=c;p->bg=-1;p->fs=16;p->tf=p->u=p->n=p->hn=p->vs=p->ls=p->bi=p->grp=p->ex=0;
- p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;return p;}
+ p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
 static int rc(int c,St*s){return c==-3?s->col:c;}
 static void fbounds(int y,int h,int*l,int*r){
  int i;
@@ -1356,7 +1361,7 @@ static void word(char*p,int n,N*e){
  ls(ww);lx+=spw;
  met(s,&a,&h);
  c=cadd(1,lx,0,ww,h,s->vis?-1:rc(s->col,s));
- c->a=a;c->bg=s->disp==D_INLINE&&!s->vis?rc(s->bg,s):-1;c->fs=fs;c->tf=tf;c->u=s->ul;c->t=p;c->n=n;c->vs=s->va;c->ls=s->ls;
+ c->on=e;c->a=a;c->bg=s->disp==D_INLINE&&!s->vis?rc(s->bg,s):-1;c->fs=fs;c->tf=tf;c->u=s->ul;c->t=p;c->n=n;c->vs=s->va;c->ls=s->ls;
  if(curh){c->hp=curh->p;c->hn=curh->n;}
  lx+=ww;sp=0;}
 static void txtc(N*n,char*p,int len){ /* collapsed-whitespace text */
@@ -1586,7 +1591,7 @@ static void walk(N*n){
   else if(s->disp==D_INLINE){
    lpx=rl(s->m[3],cw)+rl(s->p[3],cw)+s->bw[3];rpx=rl(s->m[1],cw)+rl(s->p[1],cw)+s->bw[1];
    if(lpx>0){if(LH)lx+=lpx;else padp+=lpx;}
-   walk(c);
+   {N*svn=curn;curn=c;walk(c);curn=svn;}
    if(rpx>0&&LH)lx+=rpx;}
   else blk(c,cx,cw);
   curh=old;curop=op0;}
@@ -1625,7 +1630,9 @@ static void bside(int st,int x,int y,int w,int h,int c,int horiz){
  if(st==1||st==0){cadd(0,x,y,w,h,c);return;}
  seg=st==2?th*3:th;gap=st==2?th*2:th;if(seg<1)seg=1;if(gap<1)gap=1;
  for(p=0;p<len;p+=seg+gap){int l=len-p<seg?len-p:seg;if(horiz)cadd(0,x+p,y,l,h,c);else cadd(0,x,y+p,w,l,c);}}
-static void blk(N*n,int ax,int aw){
+static void blk_(N*n,int ax,int aw);
+static void blk(N*n,int ax,int aw){N*sv=curn;curn=n;blk_(n,ax,aw);curn=sv;}
+static void blk_(N*n,int ax,int aw){
  St*s=n->s;int fwv=fw,fhv=fh,fvv=fva,iso=isol,d=s->disp;
  int ml,mr,mt,mb,pl,pr,pt,pb,bl,br,bt,bb,eh,ev,w,box,cplx,bfc,tt,bt_,top,x0,tw,ys,i,nf0=nf,c0=nc,c1,hcnt=-1,autoh,fin,bh;
  int ocx=cx,ocw=cw,oca=ca,oop=curop,ocl=curcl,as,de,mlA=s->m[3].k==1,mrA=s->m[1].k==1,rad=0,shd=0,cli=-1,lim,fr_;
@@ -1917,13 +1924,17 @@ static void doabs(void){
   Y=y;pend=0;
   lay_at(c,x,wb+mlr(s,bw),y,wb,-1,0,0);}}
 
+#include "mwe_js.h"
+
 /* ---- public API ---- */
 int mwe_load(char*html,int len){
  int i;
  ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
  for(i=0;i<4;i++)qb[i]=(i&1)?(1<<30):0;
  css((S){(char*)UA,sl(UA)});
+ jready=0;jnscr=0;jlevel=0;jrec=1;
  root=parse(html,len);
+ jrec=0;
  return full;}
 void mwe_viewport_h(int h){VH=h<100?100:h;}
 void mwe_add_css(char*text,int len){css((S){text,len});}
@@ -2005,6 +2016,10 @@ int main(int ac,char**av){
  if(!(f=fopen(av[1],"rb")))return 2;
  n=(int)fread(inbuf,1,IN,f);fclose(f);
  mwe_load(inbuf,n);
+ mwe_js_time(1767225600000LL,0);mwe_js_url(av[1]);
+ mwe_js_run();
+ for(i=0;i<=1000;i+=16)mwe_js_tick(i);
+ {int ln;const char*lg=mwe_js_log(&ln);if(ln)fwrite(lg,1,ln,stderr);}
  n=mwe_layout(w);
  rs=(w*3+3)&~3;
  if(n>32768)n=32768;

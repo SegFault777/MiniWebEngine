@@ -1,0 +1,13 @@
+dcl
+loaded
+[click 10,10 -> 1]
+body got BUTTON
+[click 10,10 -> 1]
+body got BUTTON
+[click 10,80 -> 3]
+link click lnk true
+body got A
+[click 5,100 -> 1]
+body got INPUT
+key ArrowLeft 37
+clicked 2 true
