@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.3-dev3
+/* MiniWebEngine v0.4
  * Zero-dependency mini HTML5 + CSS3 engine: HTML parse -> selectors/cascade (@media, var(),
  * calc()) -> block / inline / flex / grid / table layout -> anti-aliased vector-font
  * rasterizer (outlines embedded as compact data, see tools/genfont.py) -> pixels.
@@ -12,6 +12,10 @@
  */
 #include "mwe.h"
 #include "mwe_font.h"
+#ifdef MWE_NO_CJK
+#undef MF_CJ_N
+#define MF_CJ_N 0
+#endif
 
 typedef unsigned char u8;
 typedef unsigned int u32;
@@ -24,7 +28,7 @@ typedef struct{char*p;int n;}S;
 typedef struct{int px,pc,k;}Len; /* px + pc% ; k: 0 length, 1 auto, 2 invalid, 3 plain number (px = value*1000) */
 enum{D_NONE,D_BLOCK,D_INLINE,D_IB,D_X4,D_TABLE,D_ROW,D_CELL,D_LI,D_RG};
 typedef struct{
- int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,
+ int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,wb,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,
      shx,shy,shb,shs,shc,gk,ga,gn;
  Len m[4],p[4],w,h,mnw,mxw,mnh,mxh,top,rt,bot,lf,rad[4],fb,gx,gy,gt[12];
  int gtk[12],bw[4],bc[4],bst[4],gcol[6],gpos[6],gpx[6];
@@ -75,7 +79,35 @@ static int put8(char*p,int c){
 static int hx(int c){c=lc(c);return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1;}
 
 /* ---- font metrics: tf bit0 bold, bit1 italic, bits2-3 text-transform ---- */
-static int gi(int cp){int i;if(cp>=32&&cp<=126)return cp-32;for(i=95;i<MF_N;i++)if(MF_CP[i]==cp)return i;return '?'-32;}
+static int gi(int cp){
+ int lo,hi,m;
+ if(cp>=32&&cp<=126)return cp-32;
+ lo=95;hi=MF_N-1;
+ while(lo<=hi){m=(lo+hi)>>1;if(MF_CP[m]==cp)return m;if(MF_CP[m]<cp)lo=m+1;else hi=m-1;}
+#if MF_CJ_N
+ lo=0;hi=MF_CJ_N-1;
+ while(lo<=hi){m=(lo+hi)>>1;if(MF_CJ_CP[m]==cp)return MF_N+m;if(MF_CJ_CP[m]<cp)lo=m+1;else hi=m-1;}
+#endif
+ return '?'-32;}
+static int ADV(int b,int g){
+#if MF_CJ_N
+ if(g>=MF_N)return MF_CJ_ADV[g-MF_N];
+#endif
+ return MF_ADV[b][g];}
+/* line-breaking classes: CJK ideographs/kana/fullwidth break between characters (UAX#14 subset) */
+static int iscjk(int c){return (c>=0x2E80&&c<=0xA4CF)||(c>=0xF900&&c<=0xFAFF)||(c>=0xFE30&&c<=0xFE4F)||(c>=0xFF00&&c<=0xFFEF)||(c>=0x20000&&c<=0x3FFFF);}
+static int cjopen(int c){return c==0x3008||c==0x300A||c==0x300C||c==0x300E||c==0x3010||c==0x3014||c==0xFF08||c==0xFF3B||c==0xFF5B;}
+static int cjclose(int c){return c==0x3001||c==0x3002||c==0x3009||c==0x300B||c==0x300D||c==0x300F||c==0x3011||c==0x3015||c==0xFF01||c==0xFF09||c==0xFF0C||c==0xFF0E||c==0xFF1A||c==0xFF1B||c==0xFF1F||c==0xFF3D||c==0xFF5D;}
+/* end of the next unbreakable segment starting at i (within [i,e)) */
+static int cjseg(const char*p,int i,int e,int wb){
+ int q=i,r,c;
+ if(wb==2)return e;
+ c=u8d(p,e,&q);
+ if(wb==1)return q;
+ if(!iscjk(c)){
+  for(;;){r=q;if(q>=e)return q;c=u8d(p,e,&q);if(iscjk(c))return r;}}
+ if(cjopen(c)){for(;;){r=q;if(q>=e)return q;c=u8d(p,e,&q);if(!cjopen(c)){if(!iscjk(c))return r;break;}}}
+ for(;;){r=q;if(q>=e)return q;c=u8d(p,e,&q);if(!cjclose(c))return r;}}
 static int tfm(int cp,int tt,int first){
  if(tt==1)return cp>='a'&&cp<='z'?cp-32:cp>=0xE0&&cp<=0xFE&&cp!=0xF7?cp-32:cp;
  if(tt==2)return cp>='A'&&cp<='Z'?cp+32:cp>=0xC0&&cp<=0xDE&&cp!=0xD7?cp+32:cp;
@@ -83,7 +115,7 @@ static int tfm(int cp,int tt,int first){
  return cp;}
 static int wid(const char*p,int n,int fs,int tf,int ls){
  int i=0,k=0;long long s=0;
- while(i<n){s+=MF_ADV[tf&1][gi(tfm(u8d(p,n,&i),tf>>2,k==0))];k++;}
+ while(i<n){{int g_=gi(tfm(u8d(p,n,&i),tf>>2,k==0));s+=ADV(tf&1,g_);}k++;}
  s=(s*fs+512)>>10;s+=(long long)ls*k;
  return s>100000000?100000000:s<0?0:(int)s;}
 
@@ -236,7 +268,7 @@ static void defst(St*s,St*pa){
  s->shc=-1;
  for(i=0;i<4;i++){s->bw[i]=3;s->bc[i]=-3;}
  for(i=0;i<12;i++)s->gtk[i]=2;
- if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
+ if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
  else{s->fs=16;s->lst=1;s->bsp=2;}}
 #define NV 512
 static S vnm[NV],vvl[NV];static int nvar;
@@ -404,6 +436,7 @@ static void prop(St*s,S k,S v){
  else if(kw(k,"text-align"))s->al=kw(t[0],"center")?1:(kw(t[0],"right")||kw(t[0],"end"))?2:0;
  else if(kw(k,"text-transform"))s->tt=kw(t[0],"uppercase")?1:kw(t[0],"lowercase")?2:kw(t[0],"capitalize")?3:0;
  else if(kw(k,"letter-spacing")){l=lenv(t[0],s->fs);s->ls=l.k==0?l.px:0;}
+ else if(kw(k,"word-break"))s->wb=kw(t[0],"break-all")?1:kw(t[0],"keep-all")?2:0;
  else if(kw(k,"white-space"))s->ws=kw(t[0],"nowrap")?1:kw(t[0],"pre")?2:(kw(t[0],"pre-wrap")||kw(t[0],"break-spaces"))?3:kw(t[0],"pre-line")?4:0;
  else if(kw(k,"vertical-align")){
   s->va=0;s->vaa=0;
@@ -1182,6 +1215,9 @@ static GC*glyph(int g,int fs,int tf){
  int cx=0,cy=0,sx=0,sy=0,c,qx,qy,x,y,i,j,w,h,ox,oy;float s,v;u8*o;
  if(e->used&&e->g==g&&e->fs==fs&&e->b==tf)return e;
  nsg=0;mnx=mny=1e9f;mxx=mxy=-1e9f;
+#if MF_CJ_N
+ if(g>=MF_N)p=MF_CJ_D+MF_CJ_OFF[g-MF_N];else
+#endif
  p=(b?MF_D1:MF_D0)+MF_OFF[b][g];
  while((c=*p++)){
   if(c==1){cx+=rv(&p);cy+=rv(&p);sx=cx;sy=cy;}
@@ -1201,16 +1237,22 @@ static GC*glyph(int g,int fs,int tf){
  for(j=0;j<h;j++){s=0;for(i=0;i<w;i++){s+=acc[j*(w+2)+i];v=s<0?-s:s;if(v>1)v=1;o[j*w+i]=(u8)(v*255+0.5f);}}
  return e;}
 static void gl(int x,int base,int g,int fs,int tf,int col){
- GC*e=glyph(g,fs,tf);u8*bm;int i,j,a;
+ GC*e;u8*bm;int i,j,a,dbl=0;
+#if MF_CJ_N
+ if(g>=MF_N&&(tf&1)){tf&=~1;dbl=fs>=40?2:1;}  /* CJK has one weight: synthesize bold by double strike */
+#endif
+ e=glyph(g,fs,tf);
  if(!e->w)return;
  bm=pool+e->off;
- for(j=0;j<e->h;j++)for(i=0;i<e->w;i++)if((a=bm[j*e->w+i]))bp(x+e->ox+i,base+e->oy+j,col,a);}
+ for(j=0;j<e->h;j++)for(i=0;i<e->w;i++)if((a=bm[j*e->w+i])){
+  bp(x+e->ox+i,base+e->oy+j,col,a);
+  if(dbl)bp(x+e->ox+i+dbl,base+e->oy+j,col,a);}}
 static void run(int x,int base,const char*s,int n,int fs,int tf,int ls,int col,int ul,int w){
  int i=0,pre=0,g,k=0;
  while(i<n){
   g=gi(tfm(u8d(s,n,&i),tf>>2,k==0));
   gl(x+((pre*fs+512)>>10)+k*ls,base,g,fs,tf&3,col);
-  pre+=MF_ADV[tf&1][g];k++;}
+  pre+=ADV(tf&1,g);k++;}
  if(ul&1)fr(x,base+fs/10+1,w,fs/14+1,col);
  if(ul&2)fr(x,base-fs*3/10,w,fs/14+1,col);}
 
@@ -1356,7 +1398,7 @@ static void met(St*s,int*a,int*h){
 static int ttf(St*s){return s->bold|(s->it<<1)|(s->tt<<2);}
 static void word(char*p,int n,N*e){
  St*s=e->s;int fs=s->fs,tf=ttf(s),ww=wid(p,n,fs,tf,s->ls),a,h,spw;Cmd*c;
- spw=(sp&&LH)?((MF_ADV[tf&1][0]*fs+512)>>10)+s->ls:0;
+ spw=(sp&&LH)?((ADV(tf&1,0)*fs+512)>>10)+s->ls:0;
  if(LH&&s->ws!=1&&lx+spw+ww>lend){nl();spw=0;}
  ls(ww);lx+=spw;
  met(s,&a,&h);
@@ -1365,14 +1407,18 @@ static void word(char*p,int n,N*e){
  if(curh){c->hp=curh->p;c->hn=curh->n;}
  lx+=ww;sp=0;}
 static void txtc(N*n,char*p,int len){ /* collapsed-whitespace text */
- St*s=n->par->s;int i=0,j,k,m,q,a,fs=s->fs,tf=ttf(s);long long acc;
+ St*s=n->par->s;int i=0,j,e,k,m,q,a,fs=s->fs,tf=ttf(s);long long acc;
  while(i<len){
-  if(isws(p[i])){sp=1;i++;continue;}
-  j=i;while(j<len&&!isws(p[j]))j++;
-  while(i<j){
-   acc=0;k=m=i;
-   while(k<j){q=k;a=MF_ADV[tf&1][gi(tfm(u8d(p,j,&q),tf>>2,k==i))];if(m>i&&cw>0&&s->ws!=1&&(((acc+a)*fs+512)>>10)>cw)break;acc+=a;k=q;m=q;}
-   word(p+i,m-i,n->par);i=m;}}}
+  if(isws(p[i])){
+   if(s->ws==3&&p[i]==' '){e=i;while(e<len&&p[e]==' ')e++;word(p+i,e-i,n->par);i=e;sp=0;continue;} /* pre-wrap keeps spaces */
+   sp=1;i++;continue;}
+  e=i;while(e<len&&!isws(p[e]))e++;
+  while(i<e){
+   j=cjseg(p,i,e,s->wb);
+   while(i<j){
+    acc=0;k=m=i;
+    while(k<j){q=k;a=ADV(tf&1,gi(tfm(u8d(p,j,&q),tf>>2,k==i)));if(m>i&&cw>0&&s->ws!=1&&(((acc+a)*fs+512)>>10)>cw)break;acc+=a;k=q;m=q;}
+    word(p+i,m-i,n->par);i=m;}}}}
 static void brk(St*s){int a,h;ls(0);met(s,&a,&h);nl();}
 static void txt(N*n){
  S t=n->txt;St*s=n->par->s;int i=0,j;
@@ -1380,7 +1426,7 @@ static void txt(N*n){
   while(i<=t.n){
    j=i;while(j<t.n&&t.p[j]!='\n')j++;
    if(j>i){
-    if(s->ws==4)txtc(n,t.p+i,j-i);
+    if(s->ws>=3)txtc(n,t.p+i,j-i);
     else{sp=0;word(t.p+i,j-i,n->par);}}
    if(j<t.n)brk(s);
    i=j+1;}}
@@ -1466,10 +1512,14 @@ static void mmgrid(N*n,int*mn,int*mx){
  if(s->gtauto){*mn=s->gtmin;*mx=mb;return;}
  for(i=0;i<s->gtn;i++)if(s->gtk[i]==0)fixed+=rl(s->gt[i],0);
  *mn=ma*ncol+gx*(ncol-1);*mx=(s->gtn&&fixed)?fixed+gx*(ncol-1):mb*ncol+gx*(ncol-1);}
+static int minw(const char*p,int n,int fs,int tf,int ls,int wb){
+ int i=0,j,m=0,w;
+ while(i<n){j=cjseg(p,i,n,wb);w=wid(p+i,j-i,fs,tf,ls);if(w>m)m=w;i=j;}
+ return m;}
 static void mm(N*n,int*mn,int*mx){
  int lmn=0,lmx=0,bmn=0,bmx=0,spp=0,i,j,w,a,b,ex,spw,tf,fs;N*c;St*s,*ps=n->s;S t;
  if(!ps){*mn=*mx=0;return;}
- fs=ps->fs;tf=ttf(ps);spw=((MF_ADV[tf&1][0]*fs+512)>>10)+ps->ls;
+ fs=ps->fs;tf=ttf(ps);spw=((ADV(tf&1,0)*fs+512)>>10)+ps->ls;
  for(c=n->kid;c;c=c->nx){
   if(!c->tag.n){
    t=c->txt;i=0;
@@ -1480,7 +1530,7 @@ static void mm(N*n,int*mn,int*mx){
      i++;continue;}
     j=i;while(j<t.n&&!isws(t.p[j]))j++;
     w=wid(t.p+i,j-i,fs,tf,ps->ls);
-    lmx+=(spp&&lmx?spw:0)+w;if(w>lmn)lmn=w;spp=0;i=j;}
+    lmx+=(spp&&lmx?spw:0)+w;{int mw=minw(t.p+i,j-i,fs,tf,ps->ls,ps->wb);if(mw>lmn)lmn=mw;}spp=0;i=j;}
    continue;}
   s=c->s;
   if(!s||s->disp==D_NONE||s->pos>=2)continue;
@@ -1497,7 +1547,7 @@ static void mm(N*n,int*mn,int*mx){
    if(b+ex>bmx)bmx=b+ex;
    if(a+ex>bmn)bmn=a+ex;}}
  *mn=bmn>lmn?bmn:lmn;*mx=bmx>lmx?bmx:lmx;
- if(ps->ws==1||(ps->ws>=2&&ps->ws!=4))*mn=*mx;}
+ if(ps->ws==1||ps->ws==2)*mn=*mx;}
 static void mmbox(N*c,int*mn,int*mx){
  St*s=c->s;int a,b,eh=ex_(s,0),w;
  if(s->disp==D_TABLE)mmtable(c,&a,&b);
@@ -1532,7 +1582,7 @@ static void ibox(N*c){
  outer=wb+ml+mr;
  hh=lay_at(c,0,outer,0,wb,-1,0,1);
  tf=ttf(s);
- spw=(sp&&LH)?((MF_ADV[tf&1][0]*s->fs+512)>>10):0;
+ spw=(sp&&LH)?((ADV(tf&1,0)*s->fs+512)>>10):0;
  if(LH&&s->ws!=1&&lx+spw+outer>lend){nl();spw=0;}
  ls(outer);lx+=spw;
  c0=nc;
@@ -1991,6 +2041,10 @@ const char*mwe_link(int x,int y,int*len){
 const char*mwe_title(int*len){*len=ttl.n;return ttl.p;}
 unsigned mwe_bg(void){return(unsigned)cv;}
 const char*mwe_font_name(void){return MF_NAME;}
+const char*mwe_licenses(void){
+ return "MiniWebEngine v" MWE_VERSION " - Copyright (C) 2026 the MiniWebEngine authors. Licensed under GPL-3.0-only.\n"
+  "Embedded font outlines (derived from these fonts, SIL Open Font License 1.1):\n" MF_NOTICE
+  "Inter and Noto Sans CJK are not sold by themselves; the licence texts are in fonts/OFL-Inter.txt, fonts/OFL-NotoSansCJK.txt and NOTICE.md.\n";}
 int mwe_textw(const char*s,int n,int fs,int b){return wid(s,n,fs,b&1,0);}
 void mwe_text(unsigned*buf,int st,int bw,int bh,int x,int base_,const char*s,int n,int fs,int b,unsigned col,int clx0,int clx1){
  tgt(buf,st,0,0,bw,bh);
@@ -2011,7 +2065,8 @@ static u8 rb[MAXW*3+4];
 static void pl(u8*p,int v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
 int main(int ac,char**av){
  FILE*f;int n,i,r,x,w=800,rs,by,bh;u8 h[54]={'B','M'};
- if(ac<3){static const char u[]="MiniWebEngine v" MWE_VERSION " (font: " MF_NAME ")\nusage: mwe in.html out.bmp [width]\n";fwrite(u,1,sizeof u-1,stderr);return 1;}
+ if(ac==2&&av[1][0]=='-'&&av[1][1]=='-'&&av[1][2]=='l'){const char*t=mwe_licenses();int tn=0;while(t[tn])tn++;fwrite(t,1,tn,stdout);return 0;}
+ if(ac<3){static const char u[]="MiniWebEngine v" MWE_VERSION " (font: " MF_NAME ")\nusage: mwe in.html out.bmp [width]\n       mwe --licenses\n";fwrite(u,1,sizeof u-1,stderr);return 1;}
  if(ac>3){for(i=0,x=0;av[3][i]>='0'&&av[3][i]<='9'&&x<9999;i++)x=x*10+av[3][i]-'0';if(x>=64&&x<=MAXW)w=x;}
  if(!(f=fopen(av[1],"rb")))return 2;
  n=(int)fread(inbuf,1,IN,f);fclose(f);

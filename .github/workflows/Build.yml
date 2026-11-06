@@ -30,11 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Warn if the stand-in font is still embedded
+      - name: Check licence files are present
         run: |
-          if grep -q "STAND-IN" mwe_font.h; then
-            echo "::warning file=mwe_font.h::mwe_font.h is a stand-in font, not Inter. See fonts/README.md"
-          fi
+          test -f NOTICE.md && test -f fonts/OFL-Inter.txt && test -f fonts/OFL-NotoSansCJK.txt
+          grep -q "Inter Project Authors" mwe_font.h && grep -q "Adobe" mwe_font.h
 
       - name: Build engine CLI
         run: |
@@ -52,6 +51,8 @@ jobs:
           printf 'plain <b>text</b> &#65; < 5 <unclosed' > bad.html
           ./mwe bad.html bad.bmp 300
           test -s bad.bmp
+          ./mwe --licenses | grep -q "Inter Project Authors"
+          ./mwe test3.html cjk.bmp 720 && test -s cjk.bmp
 
       - name: JavaScript regression tests
         run: sh tests/js/run.sh

@@ -7,7 +7,7 @@ A small standalone desktop web browser built on [MiniWebEngine](../README.md).
 > is a separate project that runs as an ordinary desktop application and only
 > shares the "Mini" naming. The two have different code bases and different goals.
 
-**Version 0.3-dev3** (v0.3 in progress; matches MiniWebEngine 0.3-dev3)
+**Version 0.4** (matches MiniWebEngine 0.4); `about:licenses` shows the copyright notices
 
 ## Features
 

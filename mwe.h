@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.3 public API (build mwe.c with -DMWE_LIB to embed it). */
+/* MiniWebEngine v0.4 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.3-dev3"
+#define MWE_VERSION "0.4"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -24,6 +24,8 @@ const char *mwe_stylesheet(int i, int *len);
 void mwe_add_css(char *css, int len);
 unsigned    mwe_bg(void);
 const char *mwe_font_name(void);
+/* Copyright and licence notices of the engine and the embedded fonts (UTF-8, static string). */
+const char *mwe_licenses(void);
 
 /* Text/rect helpers for host UI chrome (same font renderer). x-clip is [clx0,clx1). */
 int  mwe_textw(const char *s, int n, int fs, int bold);
