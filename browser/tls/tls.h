@@ -56,6 +56,7 @@
  * ============================================================ */
 
 #define TLS_VERSION_1_2 0x0303
+#define TLS_VERSION_1_3 0x0304
 
 #define TLS_CONTENT_CHANGE_CIPHER_SPEC 20
 #define TLS_CONTENT_ALERT              21
@@ -65,6 +66,8 @@
 #define TLS_HS_HELLO_REQUEST        0
 #define TLS_HS_CLIENT_HELLO         1
 #define TLS_HS_SERVER_HELLO         2
+#define TLS_HS_NEW_SESSION_TICKET   4
+#define TLS_HS_ENCRYPTED_EXTENSIONS 8
 #define TLS_HS_CERTIFICATE          11
 #define TLS_HS_SERVER_KEY_EXCHANGE  12
 #define TLS_HS_CERTIFICATE_REQUEST  13
@@ -72,6 +75,7 @@
 #define TLS_HS_CERTIFICATE_VERIFY   15
 #define TLS_HS_CLIENT_KEY_EXCHANGE  16
 #define TLS_HS_FINISHED             20
+#define TLS_HS_KEY_UPDATE           24
 
 /* Cipher suites this client offers, in preference order. All four are TLS 1.2 ECDHE AEAD suites
  * -- forward secret, GCM -- differing in (a) what signs the key exchange, the server certificate's
@@ -89,7 +93,9 @@ static inline int tls_suite_supported(u16 s) {
            s == TLS_SUITE_ECDHE_RSA_AES128_GCM_SHA256   || s == TLS_SUITE_ECDHE_RSA_AES256_GCM_SHA384;
 }
 static inline int tls_suite_is_ecdsa(u16 s)  { return s == TLS_SUITE_ECDHE_ECDSA_AES128_GCM_SHA256 || s == TLS_SUITE_ECDHE_ECDSA_AES256_GCM_SHA384; }
-static inline int tls_suite_is_sha384(u16 s) { return s == TLS_SUITE_ECDHE_ECDSA_AES256_GCM_SHA384 || s == TLS_SUITE_ECDHE_RSA_AES256_GCM_SHA384; }
+#define TLS_SUITE_13_AES128_GCM_SHA256 0x1301   /* TLS 1.3 suites (RFC 8446 B.4) */
+#define TLS_SUITE_13_AES256_GCM_SHA384 0x1302
+static inline int tls_suite_is_sha384(u16 s) { return s == TLS_SUITE_ECDHE_ECDSA_AES256_GCM_SHA384 || s == TLS_SUITE_ECDHE_RSA_AES256_GCM_SHA384 || s == TLS_SUITE_13_AES256_GCM_SHA384; }
 static inline int tls_suite_key_len(u16 s)   { return tls_suite_is_sha384(s) ? 32 : 16; }   /* AES-256 vs AES-128 */
 
 /* Named groups (RFC 8422): the elliptic curves the ephemeral key exchange may run on. */
@@ -205,6 +211,8 @@ typedef enum {
                                           * the receive buffer (also appended at the end, same reason) */
     TLS_FAIL_PROTOCOL_VERSION,           /* ServerHello chose a protocol version this client never
                                           * offered (it offers TLS 1.2 and nothing else) */
+    TLS_FAIL_HELLO_RETRY,                /* TLS 1.3 HelloRetryRequest: the server wants a key share we did not send */
+    TLS_FAIL_CERT_VERIFY,                /* TLS 1.3 CertificateVerify did not verify against the leaf certificate */
     TLS_FAIL_CERT_EXTENSION,             /* a certificate in the chain has a critical extension this
                                           * client does not understand, or a keyUsage / basicConstraints
                                           * combination that does not allow its role in the chain */
@@ -233,6 +241,17 @@ typedef struct {
     u32 peer_public_len;
 
     u8 master_secret[48];
+
+    /* ---- TLS 1.3 (RFC 8446) ---- */
+    int tls13;              /* 1 once the ServerHello selected TLS 1.3 */
+    int t13_stage;          /* 0 EncryptedExtensions, 1 Certificate, 2 CertificateVerify, 3 Finished */
+    int t13_certreq;        /* the server asked for a client certificate (we answer with an empty one) */
+    int t13_folded;         /* the Finished handler already hashed the server Finished into the transcript */
+    u8 session_id[32];      /* legacy_session_id we sent (the server must echo it) */
+    u8 c_hs[48], s_hs[48];  /* client/server handshake traffic secrets */
+    u8 master13[48];        /* master secret (after the handshake secret was used) */
+    u8 c_ap[48], s_ap[48];  /* client/server application traffic secrets */
+    u8 c_iv13[12], s_iv13[12];
 
     aes128_ctx_t client_write_aes, server_write_aes;
     u8 client_write_iv[4], server_write_iv[4];   /* the GCM "salt" half of
@@ -350,6 +369,131 @@ static inline void tls_transcript_update(const u8 *msg, u32 msg_len) {
     sha512_update(&tls_conn.transcript384, msg, msg_len);
 }
 
+
+/* ======================= TLS 1.3 (RFC 8446) =======================
+ * Key schedule (HKDF), record protection (AEAD with per-record nonce = IV xor sequence number,
+ * inner content type), CertificateVerify (ECDSA P-256/P-384 and RSA-PSS), Finished and KeyUpdate.
+ * Not supported: HelloRetryRequest, PSK / session tickets / 0-RTT, client certificates (an empty
+ * Certificate is sent if the server asks), ChaCha20-Poly1305 (AES-GCM suites only). */
+static inline u32 tls13_hlen(void) { return tls_suite_is_sha384(tls_conn.cipher_suite) ? 48 : 32; }
+
+/* Hash of everything in the transcript so far (the suite's hash). */
+static inline void tls13_thash(u8 *out) {
+    if (tls13_hlen() == 48) { sha512_ctx_t c = tls_conn.transcript384; sha384_final(&c, out); }
+    else { sha256_ctx_t c = tls_conn.transcript; sha256_final(&c, out); }
+}
+static inline void tls13_empty_hash(u8 *out) {
+    if (tls13_hlen() == 48) sha384((const u8 *)"", 0, out); else sha256((const u8 *)"", 0, out);
+}
+/* HKDF-Extract(salt, ikm) = HMAC(salt, ikm) */
+static inline void tls13_extract(u8 *out, const u8 *salt, u32 sl, const u8 *ikm, u32 il) { tls_hmac(out, salt, sl, ikm, il); }
+
+/* HKDF-Expand-Label(secret, label, context, olen). Every use here asks for at most one hash
+ * block of output, so HKDF-Expand is a single HMAC: T(1) = HMAC(secret, info || 0x01). */
+static inline void tls13_expand_label(u8 *out, u32 olen, const u8 *secret, const char *label, const u8 *ctx, u32 cl) {
+    u8 info[2 + 1 + 6 + 16 + 1 + 48 + 1];
+    u8 blk[48];
+    u32 p = 0, ll = 0, i;
+    while (label[ll]) ll++;
+    info[p++] = (u8)(olen >> 8); info[p++] = (u8)olen;
+    info[p++] = (u8)(6 + ll);
+    for (i = 0; i < 6; i++) info[p++] = (u8)"tls13 "[i];
+    for (i = 0; i < ll; i++) info[p++] = (u8)label[i];
+    info[p++] = (u8)cl;
+    for (i = 0; i < cl; i++) info[p++] = ctx[i];
+    info[p++] = 1;
+    tls_hmac(blk, secret, tls13_hlen(), info, p);
+    for (i = 0; i < olen; i++) out[i] = blk[i];
+}
+/* Derive-Secret(secret, label, transcript_hash) */
+static inline void tls13_derive(u8 *out, const u8 *secret, const char *label, const u8 *thash) {
+    tls13_expand_label(out, tls13_hlen(), secret, label, thash, tls13_hlen());
+}
+static inline void tls13_traffic_keys(const u8 *secret, aes128_ctx_t *aes, u8 iv[12]) {
+    u8 key[32];
+    u32 kl = (u32)tls_suite_key_len(tls_conn.cipher_suite);
+    tls13_expand_label(key, kl, secret, "key", (const u8 *)"", 0);
+    aes_set_key(aes, key, (int)kl);
+    tls13_expand_label(iv, 12, secret, "iv", (const u8 *)"", 0);
+}
+static inline int tls13_ct_equal(const u8 *a, const u8 *b, u32 n) {
+    u8 d = 0; u32 i;
+    for (i = 0; i < n; i++) d |= (u8)(a[i] ^ b[i]);
+    return d == 0;
+}
+static inline void tls13_finished_mac(u8 *out, const u8 *base_secret, const u8 *thash) {
+    u8 fk[48];
+    u32 h = tls13_hlen();
+    tls13_expand_label(fk, h, base_secret, "finished", (const u8 *)"", 0);
+    tls_hmac(out, fk, h, thash, h);
+}
+
+/* Called while handling ServerHello (the transcript already holds ClientHello + ServerHello):
+ * ECDHE with the server's X25519 share, then handshake secret -> traffic keys for both directions. */
+static inline int tls13_after_server_hello(const u8 *server_share) {
+    u8 shared[32], zero[48], early[48], derived[48], eh[48], th[48], hs[48];
+    u32 h = tls13_hlen(), i;
+    u8 nz = 0;
+    for (i = 0; i < 48; i++) zero[i] = 0;
+    x25519_scalarmult(shared, tls_conn.my_private, server_share);
+    for (i = 0; i < 32; i++) nz |= shared[i];
+    if (!nz) { tls_conn.fail_reason = TLS_FAIL_UNSUPPORTED_CURVE; return 0; }   /* low-order point */
+    tls13_empty_hash(eh);
+    tls13_extract(early, zero, h, zero, h);
+    tls13_derive(derived, early, "derived", eh);
+    tls13_extract(hs, derived, h, shared, 32);
+    tls13_thash(th);                                   /* ClientHello..ServerHello */
+    tls13_derive(tls_conn.c_hs, hs, "c hs traffic", th);
+    tls13_derive(tls_conn.s_hs, hs, "s hs traffic", th);
+    tls13_derive(derived, hs, "derived", eh);
+    tls13_extract(tls_conn.master13, derived, h, zero, h);
+    tls13_traffic_keys(tls_conn.c_hs, &tls_conn.client_write_aes, tls_conn.c_iv13);
+    tls13_traffic_keys(tls_conn.s_hs, &tls_conn.server_write_aes, tls_conn.s_iv13);
+    tls_conn.client_seq = 0; tls_conn.server_seq = 0;
+    tls_conn.read_cipher_active = 1; tls_conn.write_cipher_active = 1;
+    return 1;
+}
+
+/* RSASSA-PSS verification (RFC 8017 9.1.2) with MGF1 and a salt as long as the hash, as TLS 1.3 requires. */
+static inline int tls13_rsa_pss_verify(int hash_id, const u8 *msg, u32 ml, const u8 *sig, u32 sl,
+                                       const bignum_t *n, u32 e) {
+    u32 modbits = (u32)bn_bit_length(n), k = (modbits + 7) / 8, embits, emlen, hl, dblen, topbits, pad, i, c;
+    bignum_t sb, mb;
+    u8 emfull[512], mh[64], db[512], hh[64], mp[8 + 64 + 64], buf[64 + 4], mk[64];
+    const u8 *em, *H;
+    u8 topmask;
+    if (k == 0 || k > 512 || sl != k || modbits < 2) return 0;
+    bn_from_bytes_be(&sb, sig, sl);
+    bn_modpow_u32exp(&mb, &sb, e, n);
+    bn_to_bytes_be(&mb, emfull, k);
+    embits = modbits - 1; emlen = (embits + 7) / 8;
+    if (k > emlen && emfull[0] != 0) return 0;
+    em = emfull + (k - emlen);
+    hl = pkcs1_hash(hash_id, msg, ml, mh);
+    if (!hl || emlen < 2 * hl + 2 || em[emlen - 1] != 0xBC) return 0;
+    dblen = emlen - hl - 1; H = em + dblen;
+    topbits = 8 * emlen - embits;
+    topmask = (u8)(0xFF << (8 - topbits));
+    if (topbits && (em[0] & topmask)) return 0;
+    for (i = 0; i < hl; i++) buf[i] = H[i];
+    for (c = 0; c * hl < dblen; c++) {
+        u32 take;
+        buf[hl] = (u8)(c >> 24); buf[hl + 1] = (u8)(c >> 16); buf[hl + 2] = (u8)(c >> 8); buf[hl + 3] = (u8)c;
+        pkcs1_hash(hash_id, buf, hl + 4, mk);
+        take = dblen - c * hl; if (take > hl) take = hl;
+        for (i = 0; i < take; i++) db[c * hl + i] = (u8)(em[c * hl + i] ^ mk[i]);
+    }
+    if (topbits) db[0] &= (u8)(0xFF >> topbits);
+    pad = dblen - hl - 1;
+    for (i = 0; i < pad; i++) if (db[i]) return 0;
+    if (db[pad] != 0x01) return 0;
+    for (i = 0; i < 8; i++) mp[i] = 0;
+    for (i = 0; i < hl; i++) mp[8 + i] = mh[i];
+    for (i = 0; i < hl; i++) mp[8 + hl + i] = db[pad + 1 + i];
+    pkcs1_hash(hash_id, mp, 8 + 2 * hl, hh);
+    return tls13_ct_equal(hh, H, hl);
+}
+
 /* Writes one TLS record: header (content type, version, length) plus
  * payload, encrypting the payload first if write_cipher_active. This is
  * the ONLY function in this file that calls tcp_send_data() -- every
@@ -364,7 +508,26 @@ static inline int tls_write_record(u8 content_type, const u8 *plaintext, u32 len
      * advanced for a record that never left the building desynchronizes
      * the whole connection (every later record would fail its GCM tag
      * on the server). All or nothing. */
-    if (5 + len + (tls_conn.write_cipher_active ? 8 + 16 : 0) > tcp_send_space()) return 0;
+    if (5 + len + (tls_conn.write_cipher_active ? (tls_conn.tls13 ? 1 + 16 : 8 + 16) : 0) > tcp_send_space()) return 0;
+
+    if (tls_conn.write_cipher_active && tls_conn.tls13) {
+        /* TLS 1.3: inner plaintext = content || content_type; nonce = IV xor 64-bit sequence number;
+         * the AAD is the record header itself; the outer type is always application_data. */
+        u8 nonce[12], aad[5], tag[16];
+        u8 inner[TLS_MAX_RECORD_PLAINTEXT + 1];
+        u32 ctl = len + 1 + 16, i;
+        for (i = 0; i < 12; i++) nonce[i] = tls_conn.c_iv13[i];
+        for (i = 0; i < 8; i++) nonce[4 + i] ^= (u8)(tls_conn.client_seq >> (56 - i * 8));
+        aad[0] = TLS_CONTENT_APPLICATION_DATA; aad[1] = 3; aad[2] = 3; aad[3] = (u8)(ctl >> 8); aad[4] = (u8)ctl;
+        for (i = 0; i < len; i++) inner[i] = plaintext[i];
+        inner[len] = content_type;
+        gcm_encrypt(&tls_conn.client_write_aes, nonce, aad, 5, inner, len + 1, tag);
+        for (i = 0; i < 5; i++) record[i] = aad[i];
+        for (i = 0; i < len + 1; i++) record[5 + i] = inner[i];
+        for (i = 0; i < 16; i++) record[5 + len + 1 + i] = tag[i];
+        tls_conn.client_seq++;
+        return tcp_send_data(record, (u16)(5 + ctl));
+    }
 
     if (tls_conn.write_cipher_active) {
         u8 nonce[12];
@@ -434,17 +597,25 @@ static inline void tls_send_client_hello(void) {
     u32 host_len = 0;
     while (tls_conn.hostname[host_len]) host_len++;
 
-    u8 body[512];
+    u8 body[768];
     u32 pos = 0;
     body[pos++] = (u8)(TLS_VERSION_1_2 >> 8);
     body[pos++] = (u8)(TLS_VERSION_1_2 & 0xFF);
     for (int i = 0; i < 32; i++) body[pos++] = tls_conn.client_random[i];
-    body[pos++] = 0; /* session_id length: 0, no resumption offered */
+    /* legacy_session_id: 32 random bytes (RFC 8446 D.4 middlebox compatibility); a TLS 1.3 server must echo it */
+    tls_rng_bytes(tls_conn.session_id, 32);
+    body[pos++] = 32;
+    for (int i = 0; i < 32; i++) body[pos++] = tls_conn.session_id[i];
+    /* our ephemeral X25519 key share for TLS 1.3 */
+    tls_rng_bytes(tls_conn.my_private, 32);
+    x25519_derive_public(tls_conn.my_public, tls_conn.my_private);
+    tls_conn.my_public_len = 32;
 
-    body[pos++] = 0x00; body[pos++] = 0x08; /* cipher_suites length: 8 bytes = 4 suites */
-    static const u16 offered[4] = { TLS_SUITE_ECDHE_ECDSA_AES128_GCM_SHA256, TLS_SUITE_ECDHE_RSA_AES128_GCM_SHA256,
+    body[pos++] = 0x00; body[pos++] = 0x0C; /* cipher_suites length: 12 bytes = 6 suites */
+    static const u16 offered[6] = { TLS_SUITE_13_AES128_GCM_SHA256, TLS_SUITE_13_AES256_GCM_SHA384,
+                                    TLS_SUITE_ECDHE_ECDSA_AES128_GCM_SHA256, TLS_SUITE_ECDHE_RSA_AES128_GCM_SHA256,
                                     TLS_SUITE_ECDHE_ECDSA_AES256_GCM_SHA384, TLS_SUITE_ECDHE_RSA_AES256_GCM_SHA384 };
-    for (int k = 0; k < 4; k++) { body[pos++] = (u8)(offered[k] >> 8); body[pos++] = (u8)(offered[k] & 0xFF); }
+    for (int k = 0; k < 6; k++) { body[pos++] = (u8)(offered[k] >> 8); body[pos++] = (u8)(offered[k] & 0xFF); }
 
     body[pos++] = 0x01; body[pos++] = 0x00; /* compression_methods: 1 method, null (0) */
 
@@ -493,14 +664,25 @@ static inline void tls_send_client_hello(void) {
     /* signature_algorithms: extension_type=13 -- rsa_pkcs1_sha256 (0x0401) only */
     {
         body[pos++] = 0x00; body[pos++] = 0x0D;          /* signature_algorithms: what we can VERIFY */
-        body[pos++] = 0x00; body[pos++] = 0x0C;          /* ext body len */
-        body[pos++] = 0x00; body[pos++] = 0x0A;          /* list len: 5 pairs of (hash, signature) */
+        body[pos++] = 0x00; body[pos++] = 0x12;          /* ext body len */
+        body[pos++] = 0x00; body[pos++] = 0x10;          /* list len: 8 pairs of (hash, signature) */
         body[pos++] = 0x04; body[pos++] = 0x03;          /* ecdsa_secp256r1_sha256 */
         body[pos++] = 0x05; body[pos++] = 0x03;          /* ecdsa_secp384r1_sha384 */
+        body[pos++] = 0x08; body[pos++] = 0x04;          /* rsa_pss_rsae_sha256 (TLS 1.3 CertificateVerify) */
+        body[pos++] = 0x08; body[pos++] = 0x05;          /* rsa_pss_rsae_sha384 */
+        body[pos++] = 0x08; body[pos++] = 0x06;          /* rsa_pss_rsae_sha512 */
         body[pos++] = 0x04; body[pos++] = 0x01;          /* rsa_pkcs1_sha256 */
         body[pos++] = 0x05; body[pos++] = 0x01;          /* rsa_pkcs1_sha384 */
         body[pos++] = 0x06; body[pos++] = 0x01;          /* rsa_pkcs1_sha512 */
     }
+
+    /* supported_versions: TLS 1.3 first, TLS 1.2 as the fallback */
+    body[pos++] = 0x00; body[pos++] = 0x2B; body[pos++] = 0x00; body[pos++] = 0x05; body[pos++] = 0x04;
+    body[pos++] = 0x03; body[pos++] = 0x04; body[pos++] = 0x03; body[pos++] = 0x03;
+    /* key_share: one X25519 share (a server that insists on another group sends HelloRetryRequest, which we reject) */
+    body[pos++] = 0x00; body[pos++] = 0x33; body[pos++] = 0x00; body[pos++] = 0x26; body[pos++] = 0x00; body[pos++] = 0x24;
+    body[pos++] = 0x00; body[pos++] = 0x1D; body[pos++] = 0x00; body[pos++] = 0x20;
+    for (int i = 0; i < 32; i++) body[pos++] = tls_conn.my_public[i];
 
     u32 ext_total_len = pos - ext_start;
     body[ext_len_pos] = (u8)(ext_total_len >> 8);
@@ -518,50 +700,47 @@ static inline void tls_send_client_hello(void) {
  * extensions are present but unread -- this client sent no extensions
  * whose response it needs to act on (no ALPN, no session tickets). */
 static inline int tls_parse_server_hello(const u8 *body, u32 len) {
-    if (len < 2 + 32 + 1) return 0;
+    static const u8 hrr_random[32] = {   /* SHA-256("HelloRetryRequest"), RFC 8446 4.1.3 */
+        0xCF,0x21,0xAD,0x74,0xE5,0x9A,0x61,0x11,0xBE,0x1D,0x8C,0x02,0x1E,0x65,0xB8,0x91,
+        0xC2,0xA2,0x11,0x16,0x7A,0xBB,0x8C,0x5E,0x07,0x9E,0x09,0xE2,0xC8,0xA8,0x33,0x9C };
+    if (len < 2 + 32 + 1) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
 
-    /* Version: this client offers TLS 1.2 (and only 1.2) in its ClientHello, so that is the only
-     * answer a conforming server may give. A TLS 1.3 server that negotiated down has to say 1.2 here;
-     * anything else (an old 1.0/1.1, or a 1.3 hello we cannot parse) used to be logged and ignored and
-     * the handshake carried on under parameters we never agreed to. */
+    /* legacy_version is 0x0303 in both TLS 1.2 and TLS 1.3 ServerHellos; the real TLS 1.3 answer is
+     * the supported_versions extension below. Anything else is a protocol we never offered. */
     u16 version = (u16)((body[0] << 8) | body[1]);
     if (version != TLS_VERSION_1_2) {
         serial_puts("[TLS] server chose protocol version 0x");
         serial_put_hex16(version);
-        serial_puts(", we offered only TLS 1.2\n");
+        serial_puts(", we offered only TLS 1.3 and 1.2\n");
         tls_conn.fail_reason = TLS_FAIL_PROTOCOL_VERSION;
         return 0;
     }
     u32 pos = 2;
     for (int i = 0; i < 32; i++) tls_conn.server_random[i] = body[pos + i];
     pos += 32;
+    {   /* HelloRetryRequest is a ServerHello with this fixed random */
+        u8 d = 0;
+        for (int i = 0; i < 32; i++) d |= (u8)(tls_conn.server_random[i] ^ hrr_random[i]);
+        if (d == 0) { tls_conn.fail_reason = TLS_FAIL_HELLO_RETRY; return 0; }
+    }
     u8 session_id_len = body[pos++];
     if (session_id_len > 32) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }   /* the spec's own cap */
+    const u8 *sid = body + pos;
     pos += session_id_len;
     if (pos + 3 > len) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }       /* suite + compression must fit */
     u16 cipher_suite = (u16)((body[pos] << 8) | body[pos+1]);
     pos += 2;
     u8 compression = body[pos++];
-
-    /* The suite must be one of the four WE offered (tls_suite_supported() is exactly that set: see the
-     * `offered` table in tls_send_client_hello()). */
-    if (!tls_suite_supported(cipher_suite)) {
-        serial_puts("[TLS] server picked unsupported cipher suite 0x");
-        serial_put_hex16(cipher_suite);
-        serial_puts(" (version bytes 0x");
-        serial_put_hex16(version);
-        serial_puts(")\n");
-        tls_conn.fail_reason = TLS_FAIL_UNSUPPORTED_CIPHER_SUITE;
-        return 0;
-    }
-    /* We offered null compression only; a server that picks anything else is selecting something we
-     * cannot decode (and compression under TLS is a known attack surface -- CRIME). */
+    /* We offered null compression only; anything else cannot be decoded (and TLS compression is a
+     * known attack surface -- CRIME). */
     if (compression != 0) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
 
-    /* Extensions, if any: not interpreted (this client offers no extension whose answer it must act on),
-     * but the framing must be exactly right -- a 2-byte total, then {type, 2-byte length, body}
-     * entries that end precisely at the end of the message. A truncated or overlong block means the
-     * message is not what it claims to be. */
+    /* Extensions: the framing must be exactly right (2-byte total, then {type, 2-byte length, body}
+     * entries ending precisely at the end of the message). We read two: supported_versions (0x002B,
+     * the TLS 1.3 marker) and key_share (0x0033, the server's X25519 share). */
+    u16 sel_version = 0, ks_group = 0;
+    const u8 *ks_key = 0;
+    u32 ks_len = 0;
     if (pos < len) {
         if (pos + 2 > len) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
         u32 ext_total = ((u32)body[pos] << 8) | body[pos + 1];
@@ -569,11 +748,54 @@ static inline int tls_parse_server_hello(const u8 *body, u32 len) {
         if (pos + ext_total != len) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
         while (pos < len) {
             if (pos + 4 > len) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
+            u16 etype = (u16)((body[pos] << 8) | body[pos + 1]);
             u32 elen = ((u32)body[pos + 2] << 8) | body[pos + 3];
             pos += 4;
             if (pos + elen > len) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
+            if (etype == 0x002B && elen == 2) sel_version = (u16)((body[pos] << 8) | body[pos + 1]);
+            else if (etype == 0x0033 && elen >= 4) {
+                ks_group = (u16)((body[pos] << 8) | body[pos + 1]);
+                ks_len = ((u32)body[pos + 2] << 8) | body[pos + 3];
+                if (4 + ks_len != elen) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
+                ks_key = body + pos + 4;
+            }
             pos += elen;
         }
+    }
+
+    if (sel_version == TLS_VERSION_1_3) {
+        if (cipher_suite != TLS_SUITE_13_AES128_GCM_SHA256 && cipher_suite != TLS_SUITE_13_AES256_GCM_SHA384) {
+            tls_conn.fail_reason = TLS_FAIL_UNSUPPORTED_CIPHER_SUITE; return 0;
+        }
+        if (session_id_len != 32) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
+        { u8 d = 0; for (int i = 0; i < 32; i++) d |= (u8)(sid[i] ^ tls_conn.session_id[i]);
+          if (d) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; } }   /* must echo our session id */
+        if (!ks_key || ks_group != TLS_GROUP_X25519 || ks_len != 32) { tls_conn.fail_reason = TLS_FAIL_UNSUPPORTED_CURVE; return 0; }
+        tls_conn.cipher_suite = cipher_suite;
+        tls_conn.tls13 = 1;
+        tls_conn.t13_stage = 0;
+        return tls13_after_server_hello(ks_key);
+    }
+    if (sel_version != 0) { tls_conn.fail_reason = TLS_FAIL_PROTOCOL_VERSION; return 0; }
+
+    /* ---- TLS 1.2 ---- */
+    /* Downgrade protection (RFC 8446 4.1.3): a TLS 1.3-capable server that is forced down to 1.2 puts
+     * "DOWNGRD" + 0x01 in the last 8 bytes of its random. Seeing it means somebody interfered. */
+    {
+        static const u8 dg[7] = { 0x44,0x4F,0x57,0x4E,0x47,0x52,0x44 };
+        int hit = 1;
+        for (int i = 0; i < 7; i++) if (tls_conn.server_random[24 + i] != dg[i]) hit = 0;
+        if (hit && (tls_conn.server_random[31] == 0x00 || tls_conn.server_random[31] == 0x01)) {
+            tls_conn.fail_reason = TLS_FAIL_PROTOCOL_VERSION; return 0;
+        }
+    }
+    /* The suite must be one of the four TLS 1.2 suites we offered. */
+    if (!tls_suite_supported(cipher_suite)) {
+        serial_puts("[TLS] server picked unsupported cipher suite 0x");
+        serial_put_hex16(cipher_suite);
+        serial_putc('\n');
+        tls_conn.fail_reason = TLS_FAIL_UNSUPPORTED_CIPHER_SUITE;
+        return 0;
     }
     tls_conn.cipher_suite = cipher_suite;
     return 1;
@@ -789,10 +1011,13 @@ static inline int tls_parse_server_key_exchange(const u8 *body, u32 len) {
     /* Then the signature over those params: a SignatureAndHashAlgorithm pair, a length, the bytes. */
     if (params_end + 4 > len) { tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE; return 0; }
     u8 hash_byte = body[params_end], sig_byte = body[params_end + 1];
-    int hash_id = (hash_byte == 4) ? PKCS1_HASH_SHA256 : (hash_byte == 5) ? PKCS1_HASH_SHA384
+    /* 0x0804..0x0806 = rsa_pss_rsae_sha256/384/512: hash_byte is 8 and sig_byte names the hash */
+    int is_pss = (hash_byte == 8 && sig_byte >= 4 && sig_byte <= 6);
+    int hash_id = is_pss ? (sig_byte == 4 ? PKCS1_HASH_SHA256 : sig_byte == 5 ? PKCS1_HASH_SHA384 : PKCS1_HASH_SHA512)
+                : (hash_byte == 4) ? PKCS1_HASH_SHA256 : (hash_byte == 5) ? PKCS1_HASH_SHA384
                 : (hash_byte == 6) ? PKCS1_HASH_SHA512 : PKCS1_HASH_NONE;
-    int is_ecdsa_sig = (sig_byte == 3);
-    if (hash_id == PKCS1_HASH_NONE || (sig_byte != 1 && sig_byte != 3)) {
+    int is_ecdsa_sig = (!is_pss && sig_byte == 3);
+    if (hash_id == PKCS1_HASH_NONE || (!is_pss && sig_byte != 1 && sig_byte != 3)) {
         serial_puts("[TLS] server signed with unsupported algorithm 0x");
         serial_put_hex16((u16)((hash_byte << 8) | sig_byte));
         serial_putc('\n');
@@ -825,7 +1050,8 @@ static inline int tls_parse_server_key_exchange(const u8 *body, u32 len) {
         }
     } else {
         if (!leaf->pubkey_valid ||
-            !pkcs1_verify(hash_id, signed_data, sd_pos, body + sig_start, sig_len, &leaf->pubkey_modulus, leaf->pubkey_exponent)) {
+            !(is_pss ? tls13_rsa_pss_verify(hash_id, signed_data, sd_pos, body + sig_start, sig_len, &leaf->pubkey_modulus, leaf->pubkey_exponent)
+                     : pkcs1_verify(hash_id, signed_data, sd_pos, body + sig_start, sig_len, &leaf->pubkey_modulus, leaf->pubkey_exponent))) {
             tls_conn.fail_reason = TLS_FAIL_SKE_SIGNATURE;
             return 0;
         }
@@ -969,6 +1195,180 @@ static inline int tls_decrypt_record(u8 content_type, u8 *payload, u32 payload_l
     return 1;
 }
 
+/* ---- TLS 1.3 handshake messages (everything after ServerHello is encrypted) ---- */
+
+/* Certificate: opaque context<0..255>, then certificate_list<0..2^24-1> of
+ * { cert_data<1..2^24-1>, extensions<0..2^16-1> } entries. */
+static inline int tls13_parse_certificate(const u8 *body, u32 len) {
+    if (len < 4) return 0;
+    u32 ctx = body[0];
+    if (1 + ctx + 3 > len) return 0;
+    u32 pos = 1 + ctx;
+    u32 total = ((u32)body[pos] << 16) | ((u32)body[pos + 1] << 8) | body[pos + 2];
+    pos += 3;
+    if (pos + total != len) return 0;
+    int count = 0;
+    while (pos < len) {
+        if (pos + 3 > len) return 0;
+        u32 cl = ((u32)body[pos] << 16) | ((u32)body[pos + 1] << 8) | body[pos + 2];
+        pos += 3;
+        if (cl == 0 || pos + cl + 2 > len) return 0;
+        if (count >= TLS_CHAIN_MAX) { tls_conn.fail_reason = TLS_FAIL_BUFFER_OVERFLOW; return 0; }
+        if (!x509_parse(body + pos, cl, &tls_conn.chain[count])) { tls_conn.fail_reason = TLS_FAIL_CERT_PARSE; return 0; }
+        count++;
+        pos += cl;
+        u32 el = ((u32)body[pos] << 8) | body[pos + 1];
+        pos += 2;
+        if (pos + el > len) return 0;
+        pos += el;                                       /* per-certificate extensions (OCSP, SCT): ignored */
+    }
+    tls_conn.chain_len = count;
+    return count > 0;
+}
+
+/* CertificateVerify: the server signs 64 spaces || "TLS 1.3, server CertificateVerify" || 0x00 ||
+ * Hash(transcript up to and including Certificate) with the key of the leaf certificate. */
+static inline int tls13_verify_certificate_verify(const u8 *body, u32 len) {
+    static const char ctxs[] = "TLS 1.3, server CertificateVerify";
+    u8 content[64 + 33 + 1 + 48];
+    u32 n = 0, hl = tls13_hlen(), i;
+    if (len < 4) return 0;
+    u16 scheme = (u16)((body[0] << 8) | body[1]);
+    u32 sl = ((u32)body[2] << 8) | body[3];
+    if (4 + sl != len) return 0;
+    const u8 *sig = body + 4;
+    for (i = 0; i < 64; i++) content[n++] = 0x20;
+    for (i = 0; i < 33; i++) content[n++] = (u8)ctxs[i];       /* the 33-character context string */
+    content[n++] = 0x00;                                       /* ...then the zero separator */
+    tls13_thash(content + n); n += hl;
+    x509_cert_t *leaf = &tls_conn.chain[0];
+    if (scheme == 0x0403 || scheme == 0x0503) {
+        u16 want = scheme == 0x0403 ? TLS_GROUP_SECP256R1 : TLS_GROUP_SECP384R1;
+        ecc_curve_t *curve = ecc_curve_by_group(leaf->ec_group);
+        u8 digest[64];
+        u32 dl = pkcs1_hash(scheme == 0x0403 ? PKCS1_HASH_SHA256 : PKCS1_HASH_SHA384, content, n, digest);
+        if (leaf->ec_group != want || !curve || leaf->ec_point_len == 0 || !dl) return 0;
+        return ecdsa_verify_der(curve, leaf->ec_point, leaf->ec_point_len, digest, dl, sig, sl);
+    }
+    if (scheme == 0x0804 || scheme == 0x0805 || scheme == 0x0806) {
+        int h = scheme == 0x0804 ? PKCS1_HASH_SHA256 : scheme == 0x0805 ? PKCS1_HASH_SHA384 : PKCS1_HASH_SHA512;
+        if (!leaf->pubkey_valid) return 0;
+        return tls13_rsa_pss_verify(h, content, n, sig, sl, &leaf->pubkey_modulus, leaf->pubkey_exponent);
+    }
+    return 0;      /* rsa_pkcs1 and anything else are not allowed to sign a TLS 1.3 CertificateVerify */
+}
+
+static inline void tls13_fail(tls_fail_reason_t r) { tls_conn.fail_reason = r; tls_conn.state = TLS_FAILED; }
+
+/* The server's Finished verified: derive the application keys, answer with our Finished. */
+static inline void tls13_finish_handshake(const u8 *finished_msg, u32 msg_len) {
+    u32 h = tls13_hlen();
+    u8 th[48], mac[48], hdr[4];
+    /* fold the server Finished into the transcript now: the application secrets cover it */
+    tls_transcript_update(finished_msg, msg_len);
+    tls_conn.t13_folded = 1;
+    tls13_thash(th);                                    /* ClientHello..server Finished */
+    tls13_derive(tls_conn.c_ap, tls_conn.master13, "c ap traffic", th);
+    tls13_derive(tls_conn.s_ap, tls_conn.master13, "s ap traffic", th);
+
+    /* middlebox-compatibility ChangeCipherSpec (RFC 8446 D.4) -- a plain record, not encrypted */
+    { u8 ccs[6] = { TLS_CONTENT_CHANGE_CIPHER_SPEC, 3, 3, 0, 1, 1 }; tcp_send_data(ccs, 6); }
+    if (tls_conn.t13_certreq) {                         /* we have no client certificate: say so with an empty list */
+        static const u8 empty_cert[4] = { 0, 0, 0, 0 };
+        if (!tls_send_handshake(TLS_HS_CERTIFICATE, empty_cert, 4)) { tls13_fail(TLS_FAIL_TCP); return; }
+    }
+    tls13_thash(th);                                    /* includes our own Certificate, if any */
+    tls13_finished_mac(mac, tls_conn.c_hs, th);
+    (void)hdr;
+    if (!tls_send_handshake(TLS_HS_FINISHED, mac, h)) { tls13_fail(TLS_FAIL_TCP); return; }
+
+    /* switch both directions to the application traffic keys */
+    tls13_traffic_keys(tls_conn.c_ap, &tls_conn.client_write_aes, tls_conn.c_iv13);
+    tls13_traffic_keys(tls_conn.s_ap, &tls_conn.server_write_aes, tls_conn.s_iv13);
+    tls_conn.client_seq = 0; tls_conn.server_seq = 0;
+    tls_conn.state = TLS_ESTABLISHED;
+}
+
+static inline void tls13_dispatch(u8 msg_type, const u8 *body, u32 body_len, u64 now_packed) {
+    u32 h = tls13_hlen();
+    if (tls_conn.state == TLS_ESTABLISHED) {
+        if (msg_type == TLS_HS_KEY_UPDATE && body_len == 1 && body[0] <= 1) {
+            u8 z = 0;
+            tls13_expand_label(tls_conn.s_ap, h, tls_conn.s_ap, "traffic upd", (const u8 *)"", 0);
+            tls13_traffic_keys(tls_conn.s_ap, &tls_conn.server_write_aes, tls_conn.s_iv13);
+            tls_conn.server_seq = 0;
+            if (body[0] == 1) {                         /* update_requested: update our sending keys too */
+                if (!tls_send_handshake(TLS_HS_KEY_UPDATE, &z, 1)) { tls13_fail(TLS_FAIL_TCP); return; }
+                tls13_expand_label(tls_conn.c_ap, h, tls_conn.c_ap, "traffic upd", (const u8 *)"", 0);
+                tls13_traffic_keys(tls_conn.c_ap, &tls_conn.client_write_aes, tls_conn.c_iv13);
+                tls_conn.client_seq = 0;
+            }
+        } else if (msg_type == TLS_HS_KEY_UPDATE) {
+            tls13_fail(TLS_FAIL_UNEXPECTED_MESSAGE);
+        }
+        return;                                         /* NewSessionTicket and friends: ignored */
+    }
+    switch (tls_conn.t13_stage) {
+    case 0:                                             /* EncryptedExtensions */
+        if (msg_type != TLS_HS_ENCRYPTED_EXTENSIONS || body_len < 2 ||
+            (((u32)body[0] << 8) | body[1]) + 2 != body_len) { tls13_fail(TLS_FAIL_UNEXPECTED_MESSAGE); return; }
+        tls_conn.t13_stage = 1;
+        break;
+    case 1:                                             /* [CertificateRequest] then Certificate */
+        if (msg_type == TLS_HS_CERTIFICATE_REQUEST) { tls_conn.t13_certreq = 1; break; }
+        if (msg_type != TLS_HS_CERTIFICATE) { tls13_fail(TLS_FAIL_UNEXPECTED_MESSAGE); return; }
+        if (!tls13_parse_certificate(body, body_len)) {
+            if (tls_conn.fail_reason == TLS_FAIL_NONE) tls_conn.fail_reason = TLS_FAIL_UNEXPECTED_MESSAGE;
+            tls_conn.state = TLS_FAILED; return;
+        }
+        if (!tls_verify_certificate_chain(now_packed)) { tls_conn.state = TLS_FAILED; return; }
+        tls_conn.t13_stage = 2;
+        break;
+    case 2:                                             /* CertificateVerify */
+        if (msg_type != TLS_HS_CERTIFICATE_VERIFY) { tls13_fail(TLS_FAIL_UNEXPECTED_MESSAGE); return; }
+        if (!tls13_verify_certificate_verify(body, body_len)) { tls13_fail(TLS_FAIL_CERT_VERIFY); return; }
+        tls_conn.t13_stage = 3;
+        break;
+    case 3: {                                           /* Finished */
+        u8 th[48], mac[48];
+        if (msg_type != TLS_HS_FINISHED || body_len != h) { tls13_fail(TLS_FAIL_SERVER_FINISHED); return; }
+        tls13_thash(th);                                /* through CertificateVerify */
+        tls13_finished_mac(mac, tls_conn.s_hs, th);
+        if (!tls13_ct_equal(mac, body, h)) { tls13_fail(TLS_FAIL_SERVER_FINISHED); return; }
+        {   /* rebuild the 4-byte header for the transcript: the caller still holds the full message */
+            u8 msg[4 + 48];
+            msg[0] = TLS_HS_FINISHED; msg[1] = 0; msg[2] = 0; msg[3] = (u8)h;
+            for (u32 i = 0; i < h; i++) msg[4 + i] = body[i];
+            tls13_finish_handshake(msg, 4 + h);
+        }
+        break; }
+    default:
+        tls13_fail(TLS_FAIL_UNEXPECTED_MESSAGE);
+    }
+}
+
+/* Decrypts one TLS 1.3 record in place. The 5 header bytes sit right before `payload`. Returns the
+ * inner content type (last non-zero byte of the plaintext) and the content length. */
+static inline int tls13_decrypt_record(u8 *payload, u32 payload_len, u8 **out_plain, u32 *out_len, u8 *inner_type) {
+    if (payload_len < 16 + 1) { tls_conn.fail_reason = TLS_FAIL_BAD_RECORD; return 0; }
+    u32 ct_len = payload_len - 16, i;
+    u8 nonce[12];
+    for (i = 0; i < 12; i++) nonce[i] = tls_conn.s_iv13[i];
+    for (i = 0; i < 8; i++) nonce[4 + i] ^= (u8)(tls_conn.server_seq >> (56 - i * 8));
+    if (!gcm_decrypt(&tls_conn.server_write_aes, nonce, payload - 5, 5, payload, ct_len, payload + ct_len)) {
+        tls_conn.fail_reason = TLS_FAIL_DECRYPT;
+        return 0;
+    }
+    tls_conn.server_seq++;
+    while (ct_len > 0 && payload[ct_len - 1] == 0) ct_len--;       /* strip the zero padding */
+    if (ct_len == 0) { tls_conn.fail_reason = TLS_FAIL_BAD_RECORD; return 0; }
+    *inner_type = payload[ct_len - 1];
+    *out_plain = payload;
+    *out_len = ct_len - 1;
+    if (*out_len > TLS_MAX_RECORD_PLAINTEXT) { tls_conn.fail_reason = TLS_FAIL_BAD_RECORD; return 0; }
+    return 1;
+}
+
 /* Dispatches exactly one complete handshake message (already reassembled
  * in TLS_HS_BUF) according to the current state. Advances
  * tls_conn.state on success; sets TLS_FAILED + a reason on anything
@@ -984,6 +1384,7 @@ static inline int tls_decrypt_record(u8 content_type, u8 *payload, u32 payload_l
  * whatever ServerKeyExchange the server sent for a certificate we're
  * about to reject anyway. */
 static inline void tls_dispatch_handshake_message(u8 msg_type, const u8 *body, u32 body_len, u64 now_packed) {
+    if (tls_conn.tls13) { tls13_dispatch(msg_type, body, body_len, now_packed); return; }
     switch (tls_conn.state) {
         case TLS_CLIENT_HELLO_SENT:
             if (msg_type == TLS_HS_SERVER_HELLO) {
@@ -1090,11 +1491,18 @@ static inline void tls_process_handshake_buffer(u64 now_packed) {
          * "everything except this" hash instead of a self-referential
          * one that could never match. */
         int is_server_finished = (tls_conn.state == TLS_CLIENT_FINISHED_SENT && msg_type == TLS_HS_FINISHED);
-
-        if (!is_server_finished) {
+        /* TLS 1.3: CertificateVerify and Finished are verified against the transcript BEFORE them, so they
+         * are hashed after dispatch (the Finished handler hashes itself: it needs the result). */
+        int late13 = tls_conn.tls13 && tls_conn.state == TLS_CLIENT_HELLO_SENT &&
+                     (msg_type == TLS_HS_CERTIFICATE_VERIFY || msg_type == TLS_HS_FINISHED);
+        if (!is_server_finished && !late13) {
             tls_transcript_update(TLS_HS_BUF, total);
         }
         tls_dispatch_handshake_message(msg_type, TLS_HS_BUF + 4, body_len, now_packed);
+        if (late13 && !tls_conn.t13_folded && tls_conn.state != TLS_FAILED) {
+            tls_transcript_update(TLS_HS_BUF, total);
+        }
+        tls_conn.t13_folded = 0;
         if (is_server_finished && tls_conn.state != TLS_FAILED) {
             tls_transcript_update(TLS_HS_BUF, total);
         }
@@ -1152,11 +1560,23 @@ static inline void tls_process_raw_buffer(u64 now_packed) {
         u8 *plain = payload;
         u32 plain_len = rec_len;
 
+        if (tls_conn.tls13 && tls_conn.read_cipher_active && content_type != TLS_CONTENT_CHANGE_CIPHER_SPEC) {
+            /* TLS 1.3: every record after the ServerHello is application_data on the outside; the real
+             * type is the last non-zero byte of the decrypted plaintext. A plaintext alert/handshake
+             * record at this point is not something a TLS 1.3 server sends. */
+            u8 inner;
+            if (content_type != TLS_CONTENT_APPLICATION_DATA) { tls_conn.fail_reason = TLS_FAIL_BAD_RECORD; tls_conn.state = TLS_FAILED; return; }
+            if (!tls13_decrypt_record(payload, rec_len, &plain, &plain_len, &inner)) { tls_conn.state = TLS_FAILED; return; }
+            content_type = inner;
+        }
+
         if (content_type == TLS_CONTENT_CHANGE_CIPHER_SPEC) {
-            tls_conn.read_cipher_active = 1;
-            tls_conn.server_seq = 0;
+            if (!tls_conn.tls13) {                      /* in TLS 1.3 the CCS record is a meaningless compatibility relic */
+                tls_conn.read_cipher_active = 1;
+                tls_conn.server_seq = 0;
+            }
         } else if (content_type == TLS_CONTENT_ALERT) {
-            if (tls_conn.read_cipher_active) {
+            if (tls_conn.read_cipher_active && !tls_conn.tls13) {
                 if (!tls_decrypt_record(content_type, payload, rec_len, &plain, &plain_len)) {
                     tls_conn.state = TLS_FAILED;
                     return;
@@ -1188,7 +1608,7 @@ static inline void tls_process_raw_buffer(u64 now_packed) {
              * noted, not fatal; the peer closing their write side is
              * handled the same way TCP's own FIN is, elsewhere */
         } else if (content_type == TLS_CONTENT_HANDSHAKE || content_type == TLS_CONTENT_APPLICATION_DATA) {
-            if (tls_conn.read_cipher_active) {
+            if (tls_conn.read_cipher_active && !tls_conn.tls13) {
                 if (!tls_decrypt_record(content_type, payload, rec_len, &plain, &plain_len)) {
                     tls_conn.state = TLS_FAILED;
                     return;
@@ -1248,6 +1668,10 @@ static inline void tls_connect(u32 ip, u16 port, const char *hostname, const u8 
     tls_conn.alert_level = 0;
     tls_conn.alert_desc = 0;
     tls_conn.peer_close_notify = 0;
+    tls_conn.tls13 = 0;
+    tls_conn.t13_stage = 0;
+    tls_conn.t13_certreq = 0;
+    tls_conn.t13_folded = 0;
 
     u32 i = 0;
     for (; hostname[i] && i < sizeof(tls_conn.hostname) - 1; i++) tls_conn.hostname[i] = hostname[i];

@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.4** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.5** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -17,7 +17,7 @@ buffer (library). It is built around one goal: stay small and dependency-free.
 - **No external dependencies.** The engine source calls no libc function; only the optional CLI uses
   `fopen`/`fread`/`fwrite`/`fclose`. No `malloc` (static arena and a static JS heap), no `libm`.
   (Compilers may still emit `memcpy`/`memmove`/`memset`/`strlen` for struct copies and loops.)
-- About 2.7 MB stripped on Linux (`-Os`), 0.4 MB with `-DMWE_NO_CJK`: the CJK font outlines are about 2.4 MB, Inter about 130 KB and the JavaScript engine about 130 KB. Static memory is large (about 70 MB of zero-initialized `.bss`: 16 MB
+- About 2.7 MB stripped on Linux (`-Os`), 0.4 MB with `-DMWE_NO_CJK`: the CJK font outlines are about 2.4 MB, the Latin/Greek/Cyrillic outlines about 95 KB and the JavaScript engine about 130 KB. Static memory is large (about 70 MB of zero-initialized `.bss`: 16 MB
   document arena + 24 MB JS heap + buffers) but pages are only touched when used
 - Library API in `mwe.h`; the same code backs the CLI and [MiniBrowser](browser/README.md)
 - Streaming CLI output: the page is rendered in 32-row bands, no full-size framebuffer
@@ -46,21 +46,22 @@ cc -std=c99 -Os -DMWE_LIB -c mwe.c
 
 ## Fonts
 
-v0.4 renders text with **Inter** (Latin, Greek, Cyrillic; Regular + Bold) and **Noto Sans CJK SC**
-(Simplified Chinese, GB2312) from outlines embedded in `mwe_font.h`. CJK text wraps between
-characters with basic kinsoku rules (closing punctuation never starts a line). Both fonts are under
-the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/README.md](fonts/README.md).
-`mwe --licenses` / `mwe_licenses()` print the notices. Build with `-DMWE_NO_CJK` for a small
-Latin-only binary (about 0.4 MB).
+v0.5 uses the **Noto Sans** family only: every glyph (Latin, Greek, Cyrillic, Simplified Chinese;
+Regular + Bold) is an outline of **Noto Sans CJK SC**, embedded in `mwe_font.h`. CJK text wraps
+between characters with basic kinsoku rules (closing punctuation never starts a line). The font is
+under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/README.md](fonts/README.md).
+`mwe --licenses` / `mwe_licenses()` print the notice. Build with `-DMWE_NO_CJK` for a small
+Latin-only binary (about 0.3 MB).
 
 ![CJK test page](docs/cjk.png)
 
-## What is new in v0.4
+## What is new in v0.5
 
-- Inter replaces the stand-in font; Noto Sans CJK SC adds Chinese; Greek, Cyrillic and Latin
-  Extended-A added; glyph lookup is a binary search
-- CJK line breaking, `word-break: break-all | keep-all`, `white-space: pre-wrap` now really wraps
-- Copyright notices at run time (`mwe_licenses()`, `mwe --licenses`, `about:licenses`)
+- **TLS 1.3** in the browser (`browser/tls/`): TLS_AES_128_GCM_SHA256 and TLS_AES_256_GCM_SHA384,
+  X25519, HKDF key schedule, CertificateVerify with ECDSA P-256/P-384 and RSA-PSS, Finished,
+  KeyUpdate, downgrade protection; TLS 1.2 stays as the fallback. RSA-PSS also works in TLS 1.2
+- All fonts are Noto Sans (Inter removed); `tools/regen_font.sh` rebuilds the header
+- Not supported: HelloRetryRequest, PSK/resumption/0-RTT, ChaCha20-Poly1305, client certificates
 
 ## Library API
 
@@ -88,7 +89,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.4)
+## Supported (v0.5)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),
@@ -174,7 +175,7 @@ errors are reported on the console output instead of stopping the page.
   `document.write` is a no-op, `<script>` elements created at run time are not executed, and
   `dataset` / `style` are live views of the attributes but not enumerable
 - No images or SVG, no `@font-face`, no `@import`
-- Latin text only: Inter has no Hangul/CJK glyphs, so such characters render as `?`; no kerning, no
+- Latin, Greek, Cyrillic and Simplified Chinese (GB2312) text only: Hangul, Japanese kanji outside GB2312 and Greek with tonos render as `?`; no kerning, no
   monospace face (`pre` and `code` use the proportional font), no bidi / RTL
 - No transforms, transitions, animations, filters, `position: sticky`, `text-shadow`, `outline`,
   radial / conic gradients, inset or multiple shadows, grid areas / named lines / subgrid
@@ -185,7 +186,7 @@ errors are reported on the console output instead of stopping the page.
 ## MiniBrowser
 
 [`browser/`](browser/README.md) contains **MiniBrowser**, a standalone desktop browser built on this
-engine (Win32 + a portable core) with HTTP and verified HTTPS (TLS 1.2). It is **not** MiniWeb.
+engine (Win32 + a portable core) with HTTP and verified HTTPS (TLS 1.3 and 1.2). It is **not** MiniWeb.
 
 ## Project layout
 
@@ -196,7 +197,7 @@ mwe_js.h                JavaScript engine (included by mwe.c; not a separate tra
 tools/genfont.py        TTF -> mwe_font.h converter (needs fonttools; build-time only)
 tests/                  JavaScript regression tests (`sh tests/js/run.sh`) and the jt.c event/timer driver
 fonts/                  font licenses and notes
-browser/                MiniBrowser (+ browser/tls: TLS 1.2 client and crypto)
+browser/                MiniBrowser (+ browser/tls: TLS 1.3 / 1.2 client and crypto)
 test.html, test2.html   sample pages (test2.html exercises the dev2 features; browser/tests/pages/js_demo.html the JS)
 .github/workflows/      CI (Linux, Windows, macOS)
 ```
@@ -215,6 +216,6 @@ Embedded font outlines are under the SIL Open Font License 1.1 (see `fonts/`).
 
 SPDX-License-Identifier: `GPL-3.0-only`
 
-Embedded fonts: Inter (Copyright 2016 The Inter Project Authors) and Noto Sans CJK SC (Copyright
-2014-2021 Adobe; Noto is a trademark of Google Inc.), both under the SIL Open Font License 1.1. See
+Embedded font: Noto Sans CJK SC (Copyright 2014-2021 Adobe; Noto is a trademark of Google Inc.)
+under the SIL Open Font License 1.1. See
 [NOTICE.md](NOTICE.md); the notices must be kept with any redistribution.

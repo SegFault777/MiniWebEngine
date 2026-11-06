@@ -69,15 +69,21 @@ run "rsa cert  / ECDHE-RSA-AES128-GCM / X25519" ok localhost -- -tls1_2 -cipher 
 run "rsa cert  / ECDHE-RSA-AES256-GCM / X25519" ok localhost -- -tls1_2 -cipher ECDHE-RSA-AES256-GCM-SHA384 -groups X25519
 run "rsa cert  / ECDHE-RSA-AES128-GCM / P-256"  ok localhost -- -tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256 -groups P-256
 run "rsa cert  / ECDHE-RSA-AES256-GCM / P-384"  ok localhost -- -tls1_2 -cipher ECDHE-RSA-AES256-GCM-SHA384 -groups P-384
-run "rsa cert, server also offers TLS 1.3 (must fall back to 1.2)" ok localhost -- -cipher ECDHE-RSA-AES128-GCM-SHA256
+run "rsa cert, server offers 1.3 and 1.2 (negotiates TLS 1.3)" ok localhost -- -groups X25519
 run "REFUSE hostname mismatch (127.0.0.1 vs localhost)" refuse 127.0.0.1 -- -tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256 -groups X25519
-run "REFUSE TLS 1.3-only server" refuse localhost -- -tls1_3
+run "TLS 1.3 / rsa cert (RSA-PSS) / AES-128-GCM / X25519" ok localhost -- -tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519
+run "TLS 1.3 / rsa cert (RSA-PSS) / AES-256-GCM / X25519" ok localhost -- -tls1_3 -ciphersuites TLS_AES_256_GCM_SHA384 -groups X25519
+run "REFUSE TLS 1.3 HelloRetryRequest (server only accepts P-256)" refuse localhost -- -tls1_3 -groups P-256
+run "REFUSE TLS 1.3 with ChaCha20-only server" refuse localhost -- -tls1_3 -ciphersuites TLS_CHACHA20_POLY1305_SHA256 -groups X25519
 run "REFUSE no common cipher (ChaCha20 only)" refuse localhost -- -tls1_2 -cipher ECDHE-RSA-CHACHA20-POLY1305 -groups X25519
 mkpki ec256 rsa
+run "TLS 1.3 / ecdsa-p256 cert / AES-128-GCM" ok localhost -- -tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256 -groups X25519
 run "ecdsa-p256 cert / ECDHE-ECDSA-AES128-GCM" ok localhost -- -tls1_2 -cipher ECDHE-ECDSA-AES128-GCM-SHA256 -groups X25519
 mkpki ec384 ec384
 run "ecdsa-p384 cert (P-384 CA) / ECDHE-ECDSA-AES256-GCM" ok localhost -- -tls1_2 -cipher ECDHE-ECDSA-AES256-GCM-SHA384 -groups X25519
+run "TLS 1.3 / ecdsa-p384 cert / AES-256-GCM" ok localhost -- -tls1_3 -ciphersuites TLS_AES_256_GCM_SHA384 -groups X25519
 mkpki rsa rsa 1
+run "REFUSE TLS 1.3 certificate signed by an untrusted CA" refuse localhost -- -tls1_3 -groups X25519
 run "REFUSE certificate signed by an untrusted CA" refuse localhost -- -tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256 -groups X25519
 
 echo "TLS e2e: $pass passed, $fail failed"

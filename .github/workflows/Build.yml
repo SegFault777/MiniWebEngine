@@ -32,8 +32,8 @@ jobs:
 
       - name: Check licence files are present
         run: |
-          test -f NOTICE.md && test -f fonts/OFL-Inter.txt && test -f fonts/OFL-NotoSansCJK.txt
-          grep -q "Inter Project Authors" mwe_font.h && grep -q "Adobe" mwe_font.h
+          test -f NOTICE.md && test -f fonts/OFL-NotoSansCJK.txt
+          grep -q "Adobe" mwe_font.h
 
       - name: Build engine CLI
         run: |
@@ -51,7 +51,7 @@ jobs:
           printf 'plain <b>text</b> &#65; < 5 <unclosed' > bad.html
           ./mwe bad.html bad.bmp 300
           test -s bad.bmp
-          ./mwe --licenses | grep -q "Inter Project Authors"
+          ./mwe --licenses | grep -q "Adobe"
           ./mwe test3.html cjk.bmp 720 && test -s cjk.bmp
 
       - name: JavaScript regression tests

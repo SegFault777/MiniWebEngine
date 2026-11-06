@@ -107,7 +107,7 @@ static const char HOME[]=
 "<li>Ctrl+L focuses the address bar; Alt+Left / Alt+Right go back and forward; F5 reloads.</li></ul>"
 "<h2>Supported</h2><p class=k>HTML5 elements, CSS3 selectors, @media, var(), calc(), flexbox, grid, tables, floats, "
 "positioning, gradients, rounded corners, shadows, forms (display only), external stylesheets, a JavaScript subset, "
-"Simplified Chinese text (Noto Sans CJK SC) with Inter for Latin/Greek/Cyrillic, HTTPS (TLS 1.2, "
+"Latin, Greek, Cyrillic and Simplified Chinese text in Noto Sans, HTTPS (TLS 1.3 and 1.2, "
 "verified certificates; no way to bypass an error).</p>"
 "<h2>Not yet</h2><p class=k>Images, web fonts, Hangul and Traditional-only Chinese characters, and interactive forms. "
 "Pages load synchronously.</p>"
@@ -272,7 +272,7 @@ static void load(char*url){
    int ln;
    cpy(pg,PG,"<html><head><meta charset=\"utf-8\"><title>Licenses</title><style>body{margin:24px;max-width:760px}pre{white-space:pre-wrap}</style></head><body><h1>Licenses</h1><pre>");
    ln=len(pg);cpy(pg+ln,PG-ln,mwe_licenses());
-   ln=len(pg);cpy(pg+ln,PG-ln,"</pre><p>Full licence texts: fonts/OFL-Inter.txt, fonts/OFL-NotoSansCJK.txt and NOTICE.md in the source distribution.</p></body></html>");}
+   ln=len(pg);cpy(pg+ln,PG-ln,"</pre><p>Full licence texts: fonts/OFL-NotoSansCJK.txt and NOTICE.md in the source distribution.</p></body></html>");}
   else if(has(url,"about:blank"))cpy(pg,PG,"<html><head><title>about:blank</title></head><body></body></html>");
   else cpy(pg,PG,HOME);
   plen=len(pg);}

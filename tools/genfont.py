@@ -118,6 +118,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('regular'); ap.add_argument('bold')
     ap.add_argument('-o', '--out', default='mwe_font.h')
+    ap.add_argument('--latin-index', type=int, default=None, help='face index when the Latin fonts are .ttc files')
     ap.add_argument('--name', help='font label embedded in the header')
     ap.add_argument('--cjk', help='CJK font file (OTF/TTF/TTC); omit for a Latin-only build')
     ap.add_argument('--cjk-index', type=int, default=None, help='face index inside a .ttc')
@@ -126,7 +127,7 @@ def main():
     ap.add_argument("--cjk-err", type=float, default=3.0, help="curve simplification tolerance (1024-unit em)")
     ap.add_argument('--notice', action='append', default=[], help='copyright/licence line (repeatable)')
     a = ap.parse_args()
-    fr, fb = openfont(a.regular, None), openfont(a.bold, None)
+    fr, fb = openfont(a.regular, a.latin_index), openfont(a.bold, a.latin_index)
     probe = [fr.getBestCmap(), fb.getBestCmap()]
     cps = list(range(32, 127))
     LATIN = None

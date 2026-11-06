@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniBrowser TLS driver: runs the polled TLS 1.2 state machine (tls/tls.h) to completion
+/* MiniBrowser TLS driver: runs the polled TLS 1.3 / 1.2 state machine (tls/tls.h) to completion
  * over a blocking platform socket. Certificates are always verified (chain, validity window,
  * hostname, key-exchange signature); there is no "continue anyway" path. */
 #include "tls/tls.h"
@@ -33,8 +33,10 @@ static const char *why(void) {
     case TLS_FAIL_DECRYPT: return "A record failed authentication (possible tampering).";
     case TLS_FAIL_SERVER_FINISHED: return "The handshake could not be verified.";
     case TLS_FAIL_UNSUPPORTED_CIPHER_SUITE: return "The server chose a cipher suite this browser does not support.";
-    case TLS_FAIL_UNSUPPORTED_CURVE: return "The server chose an unsupported key-exchange curve (only X25519, P-256 and P-384 are supported).";
-    case TLS_FAIL_PROTOCOL_VERSION: return "The server does not speak TLS 1.2.";
+    case TLS_FAIL_UNSUPPORTED_CURVE: return "The server chose an unsupported key-exchange curve (TLS 1.3 supports X25519 only; TLS 1.2 also P-256 and P-384).";
+    case TLS_FAIL_PROTOCOL_VERSION: return "The server does not speak TLS 1.2 or 1.3 (or a protocol downgrade was detected).";
+    case TLS_FAIL_HELLO_RETRY: return "The server requires a key-exchange group this browser did not offer first (HelloRetryRequest is not supported).";
+    case TLS_FAIL_CERT_VERIFY: return "The server's TLS 1.3 CertificateVerify signature is invalid.";
     case TLS_FAIL_BUFFER_OVERFLOW: return "The server sent more handshake data than this browser can hold.";
     case TLS_FAIL_BAD_RECORD: return "The server sent malformed TLS data.";
     case TLS_FAIL_PEER_ALERT:

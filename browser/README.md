@@ -26,17 +26,18 @@ A small standalone desktop web browser built on [MiniWebEngine](../README.md).
 
 ## HTTPS / TLS
 
-A built-in TLS 1.2 client (`tls/`, no external library):
+A built-in TLS 1.3 / 1.2 client (`tls/`, no external library; TLS 1.3 is preferred, TLS 1.2 is the fallback):
 
-- Cipher suites: `ECDHE-{RSA,ECDSA}-AES{128,256}-GCM-{SHA256,SHA384}`
-- Key exchange: X25519, P-256, P-384
+- TLS 1.3 suites: `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`; key exchange X25519;
+  CertificateVerify with ECDSA P-256/P-384 or RSA-PSS; KeyUpdate; downgrade protection
+- TLS 1.2 suites: `ECDHE-{RSA,ECDSA}-AES{128,256}-GCM-{SHA256,SHA384}`; key exchange X25519, P-256, P-384
 - Certificates are **always verified**: signature chain to an embedded root store (Mozilla CA
   bundle subset, `tls/trusted_roots.h`), validity dates, CA / key-usage / critical-extension
   checks, host name, and the server's key-exchange signature. There is no "proceed anyway" option.
 - Randomness and the clock come from the operating system (`mb_plat_random`, `mb_plat_time`).
 
-Not supported: TLS 1.3 (the browser offers TLS 1.2 only, so TLS-1.3-only servers are refused),
-session resumption, client certificates, ChaCha20-Poly1305, revocation checking (OCSP/CRL),
+Not supported: HelloRetryRequest (a server that requires a group other than X25519 is refused),
+session resumption / PSK / 0-RTT, client certificates, ChaCha20-Poly1305, revocation checking (OCSP/CRL),
 and roots that are not in `tls/trusted_roots.h` (update that file to add or retire roots).
 
 ## Not supported (yet)
@@ -51,9 +52,9 @@ Pages load synchronously, so the window is unresponsive while a request is in fl
 |------|------|
 | `minibrowser.c` | Portable core: URLs, HTTP parsing, history, UI drawing, input handling |
 | `mb.h` | Interface between the core and the platform layer |
-| `mb_tls.c` | Drives the TLS 1.2 state machine to completion over the platform socket |
-| `tls/` | TLS 1.2 client, X.509, RSA/ECDSA, AES-GCM, SHA-2, X25519, P-256/P-384, root store |
-| `tests/tls_e2e.sh` | End-to-end TLS test against a local `openssl s_server` (11 cases) |
+| `mb_tls.c` | Drives the TLS 1.3 / 1.2 state machine to completion over the platform socket |
+| `tls/` | TLS 1.3 / 1.2 client, X.509, RSA/ECDSA, AES-GCM, SHA-2, X25519, P-256/P-384, root store |
+| `tests/tls_e2e.sh` | End-to-end TLS test against a local `openssl s_server` (17 cases) |
 | `mb_win32.c` | Win32 layer: window, GDI blit, input, a 16 ms timer for script timers, Winsock, system RNG, `alert()` (user32, gdi32, ws2_32, advapi32) |
 | `mb_shot.c` | Headless driver that renders the whole window to a BMP (tests, screenshots) |
 

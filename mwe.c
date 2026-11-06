@@ -2043,8 +2043,8 @@ unsigned mwe_bg(void){return(unsigned)cv;}
 const char*mwe_font_name(void){return MF_NAME;}
 const char*mwe_licenses(void){
  return "MiniWebEngine v" MWE_VERSION " - Copyright (C) 2026 the MiniWebEngine authors. Licensed under GPL-3.0-only.\n"
-  "Embedded font outlines (derived from these fonts, SIL Open Font License 1.1):\n" MF_NOTICE
-  "Inter and Noto Sans CJK are not sold by themselves; the licence texts are in fonts/OFL-Inter.txt, fonts/OFL-NotoSansCJK.txt and NOTICE.md.\n";}
+  "Embedded font outlines (derived from this font, SIL Open Font License 1.1):\n" MF_NOTICE
+  "Noto Sans CJK is not sold by itself; the licence text is in fonts/OFL-NotoSansCJK.txt and NOTICE.md.\n";}
 int mwe_textw(const char*s,int n,int fs,int b){return wid(s,n,fs,b&1,0);}
 void mwe_text(unsigned*buf,int st,int bw,int bh,int x,int base_,const char*s,int n,int fs,int b,unsigned col,int clx0,int clx1){
  tgt(buf,st,0,0,bw,bh);
