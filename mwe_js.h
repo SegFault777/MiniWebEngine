@@ -1,5 +1,5 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.5)
+ * MiniWebEngine JavaScript subset (v0.6)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */
@@ -333,7 +333,7 @@ static JPr*jlookup(JOb*env,JStr*name){JOb*e;JPr*p;for(e=env;e;e=e->proto){p=jfin
 #define JMAXWRAP 8192
 typedef struct{N*nd;JStr*type;JV fn;int cap;}JLst;
 typedef struct{JV fn;int id,iv,live;j64 due;JV a[3];int na;}JTm;
-static JLst jlst[JMAXLST];static int jnl;
+static JLst jlst[JMAXLST];static int jnlst;
 static JTm jtm[JMAXTMR];static int jnt,jtmid=1;
 static JOb*jwrap[JMAXWRAP];static int jnw;
 static JV jstorev[2];
@@ -394,7 +394,7 @@ static void jgc(void){
  jmarkp(jErrProto);jmarkp(jDateProto);jmarkp(jNodeProto);jmarkp(jClsProto);jmarkp(jStyleProto);jmarkp(jDocProto);
  jmarkp(jErrT);jmarkp(jErrR);jmarkp(jErrS);jmarkp(jErrF);
  for(i=0;i<8;i++)jmarkp(jroot2[i]);
- for(i=0;i<jnl;i++){jmarkp(jlst[i].type);jmarkv(jlst[i].fn);}
+ for(i=0;i<jnlst;i++){jmarkp(jlst[i].type);jmarkv(jlst[i].fn);}
  for(i=0;i<jnt;i++){int k;jmarkv(jtm[i].fn);for(k=0;k<3;k++)jmarkv(jtm[i].a[k]);}
  for(i=0;i<jnw;i++)jmarkp(jwrap[i]);
  for(i=0;i<2;i++)jmarkv(jstorev[i]);
@@ -457,7 +457,7 @@ static JIn*jih[JIH];
 static JStr*jintern(const char*p,int n){
  unsigned h=5381;int i;JIn*e;JStr*s;
  for(i=0;i<n;i++)h=h*33+(unsigned char)p[i];
- for(e=jih[h%JIH];e;e=e->nx)if(e->s->len==n){for(i=0;i<n&&e->s->d[i]==p[i];i++);if(i==n)return e->s;}
+ for(e=jih[h%JIH];e;e=e->nx)if(e->s->len==n){for(i=0;i<n&&e->s->d[i]==p[i];i++){}if(i==n)return e->s;}
  jastp=(jastp+7)&~7;
  if(jastp+8+n+1+(int)sizeof(JIn)+8>JASTSZ)return&jemptys;
  s=(JStr*)(jast+jastp);jastp+=8+n+1;s->len=n;s->asc=1;
@@ -2116,7 +2116,7 @@ JNAT(jf_of){JOb*r=jnewarr(argc);int i;JUNUSED;for(i=0;i<argc;i++)jarrpush(r,args
 /* String */
 JNAT(jf_String){JUNUSED;if(argc==0)return jcv("");if(args[0].t==JT_O&&args[0].u.o->k==OK_PLAIN&&0)return jundef();{JStr*s=jtos(args[0]);return jstrv(s);}}
 #define JTHISS JStr*s;if(th.t==JT_S)s=th.u.s;else if(th.t==JT_U||th.t==JT_NUL)return jthrowerr(jErrT,"String.prototype method called on null or undefined");else{s=jtos(th);if(jthrow)return jundef();}
-static int jfindstr(JStr*h,JStr*n,int from){int i,j;if(!n->len)return from<=h->len?from:h->len;for(i=from;i+n->len<=h->len;i++){for(j=0;j<n->len&&h->d[i+j]==n->d[j];j++);if(j==n->len)return i;}return-1;}
+static int jfindstr(JStr*h,JStr*n,int from){int i,j;if(!n->len)return from<=h->len?from:h->len;for(i=from;i+n->len<=h->len;i++){for(j=0;j<n->len&&h->d[i+j]==n->d[j];j++){}if(j==n->len)return i;}return-1;}
 static int jb2cp(JStr*s,int b){int i,n=0;if(s->asc||b<0)return b;for(i=0;i<b&&i<s->len;i++)if(((unsigned char)s->d[i]&0xC0)!=0x80)n++;return n;}
 JNAT(jfs_charAt){JTHISS{double d=jtonum(JARG(0));JV v;if(d!=d)d=0;v=jstrat(s,(int)d);return v.t==JT_U?jcv(""):v;}}
 JNAT(jfs_charCodeAt){JTHISS{double d=jtonum(JARG(0));JV v;int l;if(d!=d)d=0;v=jstrat(s,(int)d);if(v.t==JT_U)return jnum(jNAN());return jnum(jdec8(v.u.s->d,v.u.s->len,&l));}}
@@ -3102,7 +3102,7 @@ static void jn_sethtml(N*n,S h){
  while(frag->kid){c=frag->kid;jn_unlink(c);jn_insert(n,c,0);}
  jdirty=1;}
 static N*jn_find(N*n,const char*tag){N*c,*r;if(n->tag.n&&seq(n->tag,tag))return n;for(c=n->kid;c;c=c->nx){if(c->gen)continue;r=jn_find(c,tag);if(r)return r;}return 0;}
-static N*jn_byid(N*n,JStr*id){N*c,*r;if(n->tag.n&&n->id.n==id->len&&id->len){int i;for(i=0;i<id->len&&n->id.p[i]==id->d[i];i++);if(i==id->len)return n;}for(c=n->kid;c;c=c->nx){if(c->gen||!c->tag.n)continue;r=jn_byid(c,id);if(r)return r;}return 0;}
+static N*jn_byid(N*n,JStr*id){N*c,*r;if(n->tag.n&&n->id.n==id->len&&id->len){int i;for(i=0;i<id->len&&n->id.p[i]==id->d[i];i++){}if(i==id->len)return n;}for(c=n->kid;c;c=c->nx){if(c->gen||!c->tag.n)continue;r=jn_byid(c,id);if(r)return r;}return 0;}
 static JOb*jwrapn(N*n);
 static JV jwrapv(N*n){if(!n)return jnull();return jobj(jwrapn(n));}
 static JOb*jwrapn(N*n){
@@ -3503,9 +3503,9 @@ static void jleave(void){
   if(joom||jtop>(10<<20)){jgc();joom=0;}}}
 static void jaddlst(N*nd,JStr*type,JV fn,int cap){
  int i;
- for(i=0;i<jnl;i++)if(jlst[i].nd==nd&&jkeq(jlst[i].type,type)&&jseq(jlst[i].fn,fn)&&jlst[i].cap==cap)return;
- if(jnl>=JMAXLST){jthrowerr(jErrR,"too many event listeners");return;}
- jlst[jnl].nd=nd;jlst[jnl].type=type;jlst[jnl].fn=fn;jlst[jnl].cap=cap;jnl++;}
+ for(i=0;i<jnlst;i++)if(jlst[i].nd==nd&&jkeq(jlst[i].type,type)&&jseq(jlst[i].fn,fn)&&jlst[i].cap==cap)return;
+ if(jnlst>=JMAXLST){jthrowerr(jErrR,"too many event listeners");return;}
+ jlst[jnlst].nd=nd;jlst[jnlst].type=type;jlst[jnlst].fn=fn;jlst[jnlst].cap=cap;jnlst++;}
 static JV jN_addEL(JV th,JV*args,int argc){
  JNODE{
   JStr*t=JSA(0);int cap=0;
@@ -3515,7 +3515,7 @@ static JV jN_addEL(JV th,JV*args,int argc){
 static JV jN_removeEL(JV th,JV*args,int argc){
  JNODE{
   JStr*t=JSA(0);int i,j;
-  for(i=0;i<jnl;i++)if(jlst[i].nd==n&&jkeq(jlst[i].type,t)&&jseq(jlst[i].fn,JARG(1))){for(j=i;j<jnl-1;j++)jlst[j]=jlst[j+1];jnl--;break;}
+  for(i=0;i<jnlst;i++)if(jlst[i].nd==n&&jkeq(jlst[i].type,t)&&jseq(jlst[i].fn,JARG(1))){for(j=i;j<jnlst-1;j++)jlst[j]=jlst[j+1];jnlst--;break;}
   return jundef();}}
 static int jpath(N*t,N**out,int max){int n=0;while(t&&n<max-2){out[n++]=t;t=t->par;}out[n++]=&jwinn;return n;}
 static JV jcompile_handler(S code){
@@ -3544,7 +3544,7 @@ static void jfire(N*target,JStr*type,JOb*ev,int bubbles){
    if(at.p&&at.n){JOb*cw=jwrapn(cur);if(!jfind(cw,onk)){JV fn=jcompile_handler(at);if(fn.t==JT_O)jsetown(cw,onk,fn);}w=cw;}}
   if(cur==&jwinn&&jkeqc(type,"load")){N*bd=jn_find(root,"body");S at;if(bd&&(at=getattr(bd,"onload")).p&&at.n&&!jfind(jGlob,onk)){JV fn=jcompile_handler(at);if(fn.t==JT_O)jsetown(jGlob,onk,fn);}}
   if(w){JPr*p=jfind(w,onk);if(p&&jiscallable(p->v)){JV a[1],r;a[0]=evv;r=jcall(p->v,jobj(w),a,1);if(jthrow){jreport();jthrow=0;}else if(r.t==JT_B&&!r.u.b)jsetown(ev,jcstr("defaultPrevented"),jbool(1));}}
-  for(k=0;k<jnl;k++){
+  for(k=0;k<jnlst;k++){
    if(jlst[k].nd==cur&&jkeq(jlst[k].type,type)){
     JV fn=jlst[k].fn,a[1];
     a[0]=evv;jcall(fn,w?jobj(w):jundef(),a,1);
@@ -3685,7 +3685,7 @@ static void jinit(void){
  for(i=0;i<(int)(sizeof jbm/sizeof jbm[0]);i++)jbm[i]=0;
  jtop=0;joom=0;for(i=0;i<130;i++)jfree[i]=0;jbig=0;
  jastp=0;for(i=0;i<JIH;i++)jih[i]=0;
- jnl=jnt=jnw=0;jtmid=1;jlogn=0;jlog[0]=0;jalertn=0;jnavn=0;jlevel=0;jdirty=0;
+ jnlst=jnt=jnw=0;jtmid=1;jlogn=0;jlog[0]=0;jalertn=0;jnavn=0;jlevel=0;jdirty=0;
  jexv=jundef();jrv=jundef();jstorev[0]=jstorev[1]=jundef();
  jthrow=jabort=jshort=jdepth=0;
  for(i=0;i<8;i++)jroot2[i]=0;
@@ -3921,7 +3921,7 @@ int mwe_event_key(const char*type,const char*key){
  t=jn_find(root,"body");if(!t)t=root;
  jdirty=0;jenter();
  e=jmkev(type,1);jsetc(e,"key",jcv(key));jsetc(e,"code",jcv(key));
- {int kc=0;if(key[0]&&!key[1]){kc=(unsigned char)key[0];if(kc>='a'&&kc<='z')kc-=32;}else if(!jcl_(key)==0){if(jcl_(key)==5&&key[0]=='E')kc=13;else if(key[0]=='A'&&key[5]=='L')kc=37;else if(key[0]=='A'&&key[5]=='U')kc=38;else if(key[0]=='A'&&key[5]=='R')kc=39;else if(key[0]=='A'&&key[5]=='D')kc=40;else if(key[0]=='E'&&key[1]=='s')kc=27;}
+ {int kc=0;if(key[0]&&!key[1]){kc=(unsigned char)key[0];if(kc>='a'&&kc<='z')kc-=32;}else if(jcl_(key)!=0){if(jcl_(key)==5&&key[0]=='E')kc=13;else if(key[0]=='A'&&key[5]=='L')kc=37;else if(key[0]=='A'&&key[5]=='U')kc=38;else if(key[0]=='A'&&key[5]=='R')kc=39;else if(key[0]=='A'&&key[5]=='D')kc=40;else if(key[0]=='E'&&key[1]=='s')kc=27;}
   jsetc(e,"keyCode",jnum(kc));jsetc(e,"which",jnum(kc));}
  jfire(t,jcstr(type),e,1);
  if(jdirty)fl|=1;

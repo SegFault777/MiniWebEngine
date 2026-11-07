@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.5** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.6** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -17,7 +17,7 @@ buffer (library). It is built around one goal: stay small and dependency-free.
 - **No external dependencies.** The engine source calls no libc function; only the optional CLI uses
   `fopen`/`fread`/`fwrite`/`fclose`. No `malloc` (static arena and a static JS heap), no `libm`.
   (Compilers may still emit `memcpy`/`memmove`/`memset`/`strlen` for struct copies and loops.)
-- About 2.7 MB stripped on Linux (`-Os`), 0.4 MB with `-DMWE_NO_CJK`: the CJK font outlines are about 2.4 MB, the Latin/Greek/Cyrillic outlines about 95 KB and the JavaScript engine about 130 KB. Static memory is large (about 70 MB of zero-initialized `.bss`: 16 MB
+- About 2.7 MB stripped on Linux (`-Os`), 0.4 MB with `-DMWE_NO_CJK`: the CJK font outlines are about 2.4 MB, the Latin/Greek/Cyrillic outlines about 95 KB and the JavaScript engine about 130 KB (about 3.2 MB in total with the CJK glyphs). Static memory is large (about 70 MB of zero-initialized `.bss`: 16 MB
   document arena + 24 MB JS heap + buffers) but pages are only touched when used
 - Library API in `mwe.h`; the same code backs the CLI and [MiniBrowser](browser/README.md)
 - Streaming CLI output: the page is rendered in 32-row bands, no full-size framebuffer
@@ -46,22 +46,32 @@ cc -std=c99 -Os -DMWE_LIB -c mwe.c
 
 ## Fonts
 
-v0.5 uses the **Noto Sans** family only: every glyph (Latin, Greek, Cyrillic, Simplified Chinese;
-Regular + Bold) is an outline of **Noto Sans CJK SC**, embedded in `mwe_font.h`. CJK text wraps
+v0.6 uses the **Noto Sans** family only: every glyph (Latin, Greek, Cyrillic, Simplified Chinese, Hangul;
+Regular + Bold) is an outline of **Noto Sans CJK** (SC and KR faces), embedded in `mwe_font.h`. CJK text wraps
 between characters with basic kinsoku rules (closing punctuation never starts a line). The font is
 under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/README.md](fonts/README.md).
 `mwe --licenses` / `mwe_licenses()` print the notice. Build with `-DMWE_NO_CJK` for a small
-Latin-only binary (about 0.3 MB).
+Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
 
-## What is new in v0.5
+## What is new in v0.6
 
-- **TLS 1.3** in the browser (`browser/tls/`): TLS_AES_128_GCM_SHA256 and TLS_AES_256_GCM_SHA384,
-  X25519, HKDF key schedule, CertificateVerify with ECDSA P-256/P-384 and RSA-PSS, Finished,
-  KeyUpdate, downgrade protection; TLS 1.2 stays as the fallback. RSA-PSS also works in TLS 1.2
-- All fonts are Noto Sans (Inter removed); `tools/regen_font.sh` rebuilds the header
-- Not supported: HelloRetryRequest, PSK/resumption/0-RTT, ChaCha20-Poly1305, client certificates
+- **macOS build fix**: the global `fls` clashed with the BSD `fls()` declared by macOS `<string.h>`; it
+  is renamed, `brk`/`jnl` (libc names) too, and `tests/clash.c` guards against this in CI
+- **Korean**: Noto Sans CJK KR Hangul (KS X 1001, 2350 syllables + jamo) is embedded
+- **Strict UTF-8 decoding** (RFC 3629): overlong forms, surrogates, values above U+10FFFF, stray and
+  truncated bytes become U+FFFD one error at a time and decoding resynchronizes; a UTF-8 BOM is skipped;
+  numeric entities in 0x80-0x9F follow windows-1252 and `&#0;` becomes U+FFFD; about 90 more named
+  entities; zero-width and soft-hyphen characters have no width; `text-transform` maps Latin-1,
+  Latin Extended-A, Greek and Cyrillic case
+- **CSS/HTML**: `text-indent`; default styles for `code`, `kbd`, `samp`, `abbr[title]`, `progress`,
+  `meter`, `ruby`/`rt`/`rp`, `nobr`
+- **HTTPS in MiniBrowser**: lock icon and a connection panel (protocol, cipher suite, certificate name,
+  issuer, key type, validity) opened by clicking the badge; **HTTPS-first** for typed addresses (falls
+  back to http only when nothing answers on port 443, never after a certificate error); **HSTS** for
+  the session; **mixed-content blocking** (a secure page cannot load scripts/styles over http)
+- Not supported: Hangul syllables outside KS X 1001, legacy encodings (EUC-KR, GBK, ...), images
 
 ## Library API
 
@@ -89,7 +99,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.5)
+## Supported (v0.6)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),
@@ -175,7 +185,7 @@ errors are reported on the console output instead of stopping the page.
   `document.write` is a no-op, `<script>` elements created at run time are not executed, and
   `dataset` / `style` are live views of the attributes but not enumerable
 - No images or SVG, no `@font-face`, no `@import`
-- Latin, Greek, Cyrillic and Simplified Chinese (GB2312) text only: Hangul, Japanese kanji outside GB2312 and Greek with tonos render as `?`; no kerning, no
+- Latin, Greek, Cyrillic, Simplified Chinese (GB2312) and Korean (KS X 1001) text only: other scripts, Japanese kanji outside GB2312, Greek with tonos and emoji render as `?`; no kerning, no
   monospace face (`pre` and `code` use the proportional font), no bidi / RTL
 - No transforms, transitions, animations, filters, `position: sticky`, `text-shadow`, `outline`,
   radial / conic gradients, inset or multiple shadows, grid areas / named lines / subgrid

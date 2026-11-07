@@ -99,6 +99,20 @@ def gb2312_set(level):
     return out
 
 
+def ksx1001_set():
+    """Hangul of KS X 1001 (2350 most used syllables) + compatibility jamo + the standard's symbols."""
+    out = set()
+    for b0 in list(range(0xA1, 0xAD)) + list(range(0xB0, 0xC9)):
+        for b1 in range(0xA1, 0xFF):
+            try:
+                ch = bytes([b0, b1]).decode('euc-kr')
+            except UnicodeDecodeError:
+                continue
+            if len(ch) == 1: out.add(ord(ch))
+    out.update(range(0x3131, 0x3164))
+    return out
+
+
 def arr(vals, w=20):
     return ',\n'.join(','.join(str(v) for v in vals[i:i + w]) for i in range(0, len(vals), w))
 
@@ -122,6 +136,8 @@ def main():
     ap.add_argument('--name', help='font label embedded in the header')
     ap.add_argument('--cjk', help='CJK font file (OTF/TTF/TTC); omit for a Latin-only build')
     ap.add_argument('--cjk-index', type=int, default=None, help='face index inside a .ttc')
+    ap.add_argument('--hangul', help='Korean font file (OTF/TTF/TTC) supplying KS X 1001 Hangul + jamo')
+    ap.add_argument('--hangul-index', type=int, default=None)
     ap.add_argument('--cjk-level', type=int, default=2, choices=(1, 2), help='GB2312 level 1 (3755) or 1+2 (6763 hanzi)')
     ap.add_argument('--cjk-name', help='CJK font label')
     ap.add_argument("--cjk-err", type=float, default=3.0, help="curve simplification tolerance (1024-unit em)")
@@ -156,10 +172,21 @@ def main():
         if a.cjk:
             fc = openfont(a.cjk, a.cjk_index)
             cm = fc.getBestCmap()
-            want = sorted(cp for cp in gb2312_set(a.cjk_level) if cp in cm and cp >= 0x80 and cp not in set(cps))
+            have = set(cps)
+            want = sorted(cp for cp in gb2312_set(a.cjk_level) if cp in cm and cp >= 0x80 and cp not in have)
             cd, ca = load(fc, want, a.cjk_err)
+            if a.hangul:                      # merge Hangul (and KS X 1001 symbols the SC font lacks) from the KR face
+                fk = openfont(a.hangul, a.hangul_index)
+                km = fk.getBestCmap()
+                taken = have | set(want)
+                kw = sorted(cp for cp in ksx1001_set() if cp in km and cp >= 0x80 and cp not in taken)
+                kd, ka = load(fk, kw, a.cjk_err)
+                merged = sorted(zip(want + kw, cd + kd, ca + ka), key=lambda t: t[0])
+                want = [m[0] for m in merged]; cd = [m[1] for m in merged]; ca = [m[2] for m in merged]
+                print('hangul/KS X 1001: %d glyphs merged from %s' % (len(kw), fk['name'].getDebugName(1)))
             co = offsets(cd); cjn = len(want); tot += co[-1]
             cl = a.cjk_name or fc['name'].getDebugName(1)
+            co = offsets(cd); cjn = len(want); tot = ro[-1] + bo[-1] + co[-1]
             o.write('#define MF_CJ_NAME %s\n#define MF_CJ_N %d\n' % (cstr(cl), cjn))
             o.write('static const unsigned short MF_CJ_CP[MF_CJ_N]={%s};\n' % ','.join(map(str, want)))
             o.write('static const unsigned short MF_CJ_ADV[MF_CJ_N]={%s};\n' % arr(ca))

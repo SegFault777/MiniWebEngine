@@ -53,6 +53,11 @@ jobs:
           test -s bad.bmp
           ./mwe --licenses | grep -q "Adobe"
           ./mwe test3.html cjk.bmp 720 && test -s cjk.bmp
+          ./mwe test4.html ko.bmp 700 && test -s ko.bmp
+          ./mwe test5.html css.bmp 620 && test -s css.bmp
+
+      - name: No libc/POSIX name clashes (macOS SDK declares fls, ffs, ...)
+        run: cc -std=gnu11 -fsyntax-only -Wall -Wextra tests/clash.c
 
       - name: JavaScript regression tests
         run: sh tests/js/run.sh

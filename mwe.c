@@ -28,7 +28,7 @@ typedef struct{char*p;int n;}S;
 typedef struct{int px,pc,k;}Len; /* px + pc% ; k: 0 length, 1 auto, 2 invalid, 3 plain number (px = value*1000) */
 enum{D_NONE,D_BLOCK,D_INLINE,D_IB,D_X4,D_TABLE,D_ROW,D_CELL,D_LI,D_RG};
 typedef struct{
- int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,wb,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,
+ int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,wb,ti,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,
      shx,shy,shb,shs,shc,gk,ga,gn;
  Len m[4],p[4],w,h,mnw,mxw,mnh,mxh,top,rt,bot,lf,rad[4],fb,gx,gy,gt[12];
  int gtk[12],bw[4],bc[4],bst[4],gcol[6],gpos[6],gpx[6];
@@ -64,12 +64,24 @@ static int starts(S a,const char*b){int i=0;for(;b[i];i++)if(i>=a.n||lc(a.p[i])!
 static S trim(S s){while(s.n&&isws(*s.p)){s.p++;s.n--;}while(s.n&&isws(s.p[s.n-1]))s.n--;return s;}
 static int tk(S v,S*t,int mx){int n=0,i=0,a,pd;while(i<v.n&&n<mx){while(i<v.n&&isws(v.p[i]))i++;if(i>=v.n)break;a=i;pd=0;while(i<v.n&&(pd||!isws(v.p[i]))){if(v.p[i]=='(')pd++;else if(v.p[i]==')')pd--;i++;}t[n].p=v.p+a;t[n].n=i-a;n++;}return n;}
 static int splitc(S v,S*t,int mx){int n=0,i=0,a=0,pd=0;if(!v.n)return 0;for(;i<=v.n&&n<mx;i++){if(i<v.n&&v.p[i]=='(')pd++;else if(i<v.n&&v.p[i]==')')pd--;else if(i==v.n||(v.p[i]==','&&!pd)){t[n++]=trim((S){v.p+a,i-a});a=i+1;}}return n;}
+/* Strict UTF-8 decoder (RFC 3629 / Unicode "maximal subpart" replacement): overlong forms, surrogates,
+ * values above U+10FFFF, stray continuation bytes and truncated sequences all yield U+FFFD, and only the
+ * well-formed prefix of a bad sequence is consumed so decoding resynchronizes on the next lead byte. */
 static int u8d(const char*p,int n,int*i){
- int c=(u8)p[*i],k;
+ int c=(u8)p[*i],k,lo=0x80,hi=0xBF,m;
  (*i)++;
  if(c<0x80)return c;
- if(c>=0xF0){k=3;c&=7;}else if(c>=0xE0){k=2;c&=15;}else if(c>=0xC0){k=1;c&=31;}else return 0xFFFD;
- while(k--&&*i<n&&(p[*i]&0xC0)==0x80)c=c<<6|(p[(*i)++]&63);
+ if(c<0xC2||c>0xF4)return 0xFFFD;
+ if(c<0xE0){k=1;c&=0x1F;}
+ else if(c<0xF0){k=2;c&=0x0F;if(c==0)lo=0xA0;else if(c==13)hi=0x9F;}
+ else{k=3;c&=0x07;if(c==0)lo=0x90;else if(c==4)hi=0x8F;}
+ for(m=0;m<k;m++){
+  int b;
+  if(*i>=n)return 0xFFFD;
+  b=(u8)p[*i];
+  if(b<lo||b>hi)return 0xFFFD;
+  lo=0x80;hi=0xBF;
+  c=c<<6|(b&63);(*i)++;}
  return c;}
 static int put8(char*p,int c){
  if(c<0x80){p[0]=c;return 1;}
@@ -79,9 +91,12 @@ static int put8(char*p,int c){
 static int hx(int c){c=lc(c);return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1;}
 
 /* ---- font metrics: tf bit0 bold, bit1 italic, bits2-3 text-transform ---- */
+#define ZWG (MF_N+MF_CJ_N)   /* pseudo glyph: no outline, no advance */
+static int zwidth(int c){return c==0xAD||(c>=0x200B&&c<=0x200F)||(c>=0x202A&&c<=0x202E)||c==0x2060||c==0xFEFF||(c>=0xFE00&&c<=0xFE0F)||(c>=0x300&&c<=0x36F)||c<32||(c>=0x7F&&c<0xA0);}
 static int gi(int cp){
  int lo,hi,m;
  if(cp>=32&&cp<=126)return cp-32;
+ if(zwidth(cp))return ZWG;
  lo=95;hi=MF_N-1;
  while(lo<=hi){m=(lo+hi)>>1;if(MF_CP[m]==cp)return m;if(MF_CP[m]<cp)lo=m+1;else hi=m-1;}
 #if MF_CJ_N
@@ -90,6 +105,7 @@ static int gi(int cp){
 #endif
  return '?'-32;}
 static int ADV(int b,int g){
+ if(g>=ZWG)return 0;
 #if MF_CJ_N
  if(g>=MF_N)return MF_CJ_ADV[g-MF_N];
 #endif
@@ -108,10 +124,35 @@ static int cjseg(const char*p,int i,int e,int wb){
   for(;;){r=q;if(q>=e)return q;c=u8d(p,e,&q);if(iscjk(c))return r;}}
  if(cjopen(c)){for(;;){r=q;if(q>=e)return q;c=u8d(p,e,&q);if(!cjopen(c)){if(!iscjk(c))return r;break;}}}
  for(;;){r=q;if(q>=e)return q;c=u8d(p,e,&q);if(!cjclose(c))return r;}}
+/* simple (1:1) case mapping for ASCII, Latin-1, Latin Extended-A, Greek and Cyrillic */
+static int ucase(int c){
+ if(c<0x80)return c>='a'&&c<='z'?c-32:c;
+ if(c>=0xE0&&c<=0xFE&&c!=0xF7)return c-32;
+ if(c==0xFF)return 0x178;
+ if(c>=0x100&&c<=0x17F){
+  if(c==0x131||c==0x138||c==0x149||c==0x17F||c==0x178)return c;
+  if((c>=0x139&&c<=0x148)||(c>=0x179&&c<=0x17E))return(c&1)?c:c-1;
+  return(c&1)?c-1:c;}
+ if(c>=0x3B1&&c<=0x3C9)return c==0x3C2?0x3A3:c-32;
+ if(c>=0x430&&c<=0x44F)return c-32;
+ if(c>=0x450&&c<=0x45F)return c-80;
+ return c;}
+static int lcase(int c){
+ if(c<0x80)return c>='A'&&c<='Z'?c+32:c;
+ if(c>=0xC0&&c<=0xDE&&c!=0xD7)return c+32;
+ if(c==0x178)return 0xFF;
+ if(c>=0x100&&c<=0x17F){
+  if(c==0x130||c==0x138||c==0x149||c==0x17F)return c;
+  if((c>=0x139&&c<=0x148)||(c>=0x179&&c<=0x17E))return(c&1)?c+1:c;
+  return(c&1)?c:c+1;}
+ if(c>=0x391&&c<=0x3A9&&c!=0x3A2)return c+32;
+ if(c>=0x410&&c<=0x42F)return c+32;
+ if(c>=0x400&&c<=0x40F)return c+80;
+ return c;}
 static int tfm(int cp,int tt,int first){
- if(tt==1)return cp>='a'&&cp<='z'?cp-32:cp>=0xE0&&cp<=0xFE&&cp!=0xF7?cp-32:cp;
- if(tt==2)return cp>='A'&&cp<='Z'?cp+32:cp>=0xC0&&cp<=0xDE&&cp!=0xD7?cp+32:cp;
- if(tt==3&&first)return cp>='a'&&cp<='z'?cp-32:cp;
+ if(tt==1)return ucase(cp);
+ if(tt==2)return lcase(cp);
+ if(tt==3&&first)return ucase(cp);
  return cp;}
 static int wid(const char*p,int n,int fs,int tf,int ls){
  int i=0,k=0;long long s=0;
@@ -268,11 +309,11 @@ static void defst(St*s,St*pa){
  s->shc=-1;
  for(i=0;i<4;i++){s->bw[i]=3;s->bc[i]=-3;}
  for(i=0;i<12;i++)s->gtk[i]=2;
- if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
+ if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ti=pa->ti;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
  else{s->fs=16;s->lst=1;s->bsp=2;}}
 #define NV 512
 static S vnm[NV],vvl[NV];static int nvar;
-static int vfind(S nm){int i,j;for(i=nvar-1;i>=0;i--){if(vnm[i].n!=nm.n)continue;for(j=0;j<nm.n&&vnm[i].p[j]==nm.p[j];j++);if(j==nm.n)return i;}return-1;}
+static int vfind(S nm){int i,j;for(i=nvar-1;i>=0;i--){if(vnm[i].n!=nm.n)continue;for(j=0;j<nm.n&&vnm[i].p[j]==nm.p[j];j++){}if(j==nm.n)return i;}return-1;}
 static char wb[2048];
 static S subvar(S v){
  int i,j,d,len,k,loops,c;S nm,fb,val,in;
@@ -436,6 +477,7 @@ static void prop(St*s,S k,S v){
  else if(kw(k,"text-align"))s->al=kw(t[0],"center")?1:(kw(t[0],"right")||kw(t[0],"end"))?2:0;
  else if(kw(k,"text-transform"))s->tt=kw(t[0],"uppercase")?1:kw(t[0],"lowercase")?2:kw(t[0],"capitalize")?3:0;
  else if(kw(k,"letter-spacing")){l=lenv(t[0],s->fs);s->ls=l.k==0?l.px:0;}
+ else if(kw(k,"text-indent")){l=lenv(t[0],s->fs);s->ti=l.k==0?l.px:0;}
  else if(kw(k,"word-break"))s->wb=kw(t[0],"break-all")?1:kw(t[0],"keep-all")?2:0;
  else if(kw(k,"white-space"))s->ws=kw(t[0],"nowrap")?1:kw(t[0],"pre")?2:(kw(t[0],"pre-wrap")||kw(t[0],"break-spaces"))?3:kw(t[0],"pre-line")?4:0;
  else if(kw(k,"vertical-align")){
@@ -642,7 +684,7 @@ static int autoclose(S nm,S cur){
  if(seq(cur,"optgroup"))return seq(nm,"optgroup");
  return 0;}
 static int istag(const char*s,int i,int n){return s[i]=='<'&&i+1<n&&(isa(s[i+1])||s[i+1]=='/'||s[i+1]=='!'||s[i+1]=='?');}
-static const struct{const char*n;int c;}EN[]={{"AElig",198},{"Aacute",193},{"Acirc",194},{"Agrave",192},{"Aring",197},{"Atilde",195},{"Auml",196},{"Ccedil",199},{"ETH",208},{"Eacute",201},{"Ecirc",202},{"Egrave",200},{"Euml",203},{"Iacute",205},{"Icirc",206},{"Igrave",204},{"Iuml",207},{"Ntilde",209},{"Oacute",211},{"Ocirc",212},{"Ograve",210},{"Oslash",216},{"Otilde",213},{"Ouml",214},{"THORN",222},{"Uacute",218},{"Ucirc",219},{"Ugrave",217},{"Uuml",220},{"Yacute",221},{"aacute",225},{"acirc",226},{"acute",180},{"aelig",230},{"agrave",224},{"amp",38},{"apos",39},{"aring",229},{"atilde",227},{"auml",228},{"bdquo",8222},{"bull",8226},{"ccedil",231},{"cedil",184},{"cent",162},{"copy",169},{"darr",8595},{"deg",176},{"divide",247},{"eacute",233},{"ecirc",234},{"egrave",232},{"eth",240},{"euml",235},{"euro",8364},{"gt",62},{"hellip",8230},{"iacute",237},{"icirc",238},{"iexcl",161},{"igrave",236},{"iquest",191},{"iuml",239},{"laquo",171},{"larr",8592},{"ldquo",8220},{"lsaquo",8249},{"lsquo",8216},{"lt",60},{"macr",175},{"mdash",8212},{"middot",183},{"minus",8722},{"nbsp",160},{"ndash",8211},{"ntilde",241},{"oacute",243},{"ocirc",244},{"ograve",242},{"ordf",170},{"ordm",186},{"oslash",248},{"otilde",245},{"ouml",246},{"para",182},{"permil",8240},{"pound",163},{"quot",34},{"raquo",187},{"rarr",8594},{"rdquo",8221},{"reg",174},{"rsaquo",8250},{"rsquo",8217},{"sbquo",8218},{"sect",167},{"szlig",223},{"thorn",254},{"times",215},{"trade",8482},{"uacute",250},{"uarr",8593},{"ucirc",251},{"ugrave",249},{"uml",168},{"uuml",252},{"yacute",253},{"yen",165},{"yuml",255},{0,0}};
+static const struct{const char*n;int c;}EN[]={{"shy",173},{"hearts",9829},{"spades",9824},{"clubs",9827},{"diams",9830},{"harr",8596},{"rArr",8658},{"lArr",8656},{"hArr",8660},{"dagger",8224},{"Dagger",8225},{"prime",8242},{"Prime",8243},{"oline",8254},{"frasl",8260},{"infin",8734},{"ne",8800},{"le",8804},{"ge",8805},{"asymp",8776},{"equiv",8801},{"sum",8721},{"prod",8719},{"radic",8730},{"int",8747},{"part",8706},{"nabla",8711},{"isin",8712},{"cap",8745},{"cup",8746},{"and",8743},{"or",8744},{"forall",8704},{"exist",8707},{"empty",8709},{"plusmn",177},{"sup1",185},{"sup2",178},{"sup3",179},{"frac14",188},{"frac12",189},{"frac34",190},{"micro",181},{"not",172},{"curren",164},{"brvbar",166},{"ensp",8194},{"emsp",8195},{"thinsp",8201},{"zwnj",8204},{"zwj",8205},{"lrm",8206},{"rlm",8207},{"alpha",945},{"beta",946},{"gamma",947},{"delta",948},{"epsilon",949},{"lambda",955},{"mu",956},{"pi",960},{"sigma",963},{"omega",969},{"Omega",937},{"Delta",916},{"Sigma",931},{"Pi",928},{"theta",952},{"phi",966},{"tau",964},{"loz",9674},{"check",10003},{"star",9734},{"starf",9733},{"phone",9742},{"hyphen",8208},{"Aogon",260},{"ccaron",269},{"scaron",353},{"Scaron",352},{"zcaron",382},{"Zcaron",381},{"OElig",338},{"oelig",339},{"Yuml",376},{"fnof",402},{"circ",710},{"tilde",732},{"AElig",198},{"Aacute",193},{"Acirc",194},{"Agrave",192},{"Aring",197},{"Atilde",195},{"Auml",196},{"Ccedil",199},{"ETH",208},{"Eacute",201},{"Ecirc",202},{"Egrave",200},{"Euml",203},{"Iacute",205},{"Icirc",206},{"Igrave",204},{"Iuml",207},{"Ntilde",209},{"Oacute",211},{"Ocirc",212},{"Ograve",210},{"Oslash",216},{"Otilde",213},{"Ouml",214},{"THORN",222},{"Uacute",218},{"Ucirc",219},{"Ugrave",217},{"Uuml",220},{"Yacute",221},{"aacute",225},{"acirc",226},{"acute",180},{"aelig",230},{"agrave",224},{"amp",38},{"apos",39},{"aring",229},{"atilde",227},{"auml",228},{"bdquo",8222},{"bull",8226},{"ccedil",231},{"cedil",184},{"cent",162},{"copy",169},{"darr",8595},{"deg",176},{"divide",247},{"eacute",233},{"ecirc",234},{"egrave",232},{"eth",240},{"euml",235},{"euro",8364},{"gt",62},{"hellip",8230},{"iacute",237},{"icirc",238},{"iexcl",161},{"igrave",236},{"iquest",191},{"iuml",239},{"laquo",171},{"larr",8592},{"ldquo",8220},{"lsaquo",8249},{"lsquo",8216},{"lt",60},{"macr",175},{"mdash",8212},{"middot",183},{"minus",8722},{"nbsp",160},{"ndash",8211},{"ntilde",241},{"oacute",243},{"ocirc",244},{"ograve",242},{"ordf",170},{"ordm",186},{"oslash",248},{"otilde",245},{"ouml",246},{"para",182},{"permil",8240},{"pound",163},{"quot",34},{"raquo",187},{"rarr",8594},{"rdquo",8221},{"reg",174},{"rsaquo",8250},{"rsquo",8217},{"sbquo",8218},{"sect",167},{"szlig",223},{"thorn",254},{"times",215},{"trade",8482},{"uacute",250},{"uarr",8593},{"ucirc",251},{"ugrave",249},{"uml",168},{"uuml",252},{"yacute",253},{"yen",165},{"yuml",255},{0,0}};
 static S dec(S t){ /* in-place entity decode; output never longer than input */
  char*p=t.p;int o=0,i=0,j,c,v,k;S e;
  while(i<t.n){
@@ -655,6 +697,7 @@ static S dec(S t){ /* in-place entity decode; output never longer than input */
      v=0;
      if(lc(e.p[1])=='x'){for(k=2;k<e.n&&hx(e.p[k])>=0&&v<0x110000;k++)v=v*16+hx(e.p[k]);}
      else for(k=1;k<e.n&&isdg(e.p[k])&&v<0x110000;k++)v=v*10+e.p[k]-'0';
+     if(v>=0x80&&v<=0x9F){static const unsigned short W[32]={0x20AC,0x81,0x201A,0x192,0x201E,0x2026,0x2020,0x2021,0x2C6,0x2030,0x160,0x2039,0x152,0x8D,0x17D,0x8F,0x90,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x2DC,0x2122,0x161,0x203A,0x153,0x9D,0x17E,0x178};v=W[v-0x80];}
      c=(v>0&&v<0x110000&&!(v>=0xD800&&v<0xE000))?v:0xFFFD;}
     if(c){o+=put8(p+o,c);i=j+1;continue;}}}
   p[o++]=p[i++];}
@@ -794,8 +837,8 @@ static int pcomp(S s,int*pi,Cp*c,int*spec,int*pe,int depth){
     j+=a->op==1?1:2;
     while(j<arg.n&&isws(arg.p[j]))j++;
     v=(S){arg.p+j,arg.n-j};
-    if(v.n&&(v.p[0]=='"'||v.p[0]=='\'')){q=v.p[0];v.p++;v.n--;for(k=0;k<v.n&&v.p[k]!=q;k++);v.n=k;}
-    else{for(k=0;k<v.n&&!isws(v.p[k]);k++);v.n=k;}
+    if(v.n&&(v.p[0]=='"'||v.p[0]=='\'')){q=v.p[0];v.p++;v.n--;for(k=0;k<v.n&&v.p[k]!=q;k++){}v.n=k;}
+    else{for(k=0;k<v.n&&!isws(v.p[k]);k++){}v.n=k;}
     a->v=v;}
    *spec+=100;i=cl_+1;continue;}
   if(ch==':'){
@@ -987,7 +1030,10 @@ static const char UA[]=
 "input[type=checkbox][checked],input[type=radio][checked]{background:#0b57d0;border-color:#0b57d0}"
 "button,input[type=button],input[type=submit],input[type=reset]{width:auto;background:#efefef;border:1px solid #767676;border-radius:3px;padding:2px 10px;text-align:center}"
 "select{padding:2px 22px 2px 6px;min-width:60px}textarea{width:200px;height:56px;vertical-align:top}"
-"label{display:inline}details>summary{display:block;padding-left:18px}";
+"label{display:inline}details>summary{display:block;padding-left:18px}"
+"code,kbd,samp,tt{font-size:.92em;background:#f3f3f3;padding:0 3px;border-radius:3px}kbd{border:1px solid #c8c8c8;border-bottom-width:2px;background:#fafafa}"
+"abbr[title],acronym[title]{text-decoration:underline}progress,meter{display:inline-block;width:160px;height:1em;background:#e6e6e6;border-radius:4px;vertical-align:middle}"
+"rp{display:none}rt{font-size:.5em}nobr{white-space:nowrap}";
 
 /* ---- presentational attributes (HTML4-style hints) ---- */
 static int hcolor(S a){
@@ -1216,7 +1262,10 @@ static GC*glyph(int g,int fs,int tf){
  if(e->used&&e->g==g&&e->fs==fs&&e->b==tf)return e;
  nsg=0;mnx=mny=1e9f;mxx=mxy=-1e9f;
 #if MF_CJ_N
+ if(g>=ZWG)p=(const u8*)"";else
  if(g>=MF_N)p=MF_CJ_D+MF_CJ_OFF[g-MF_N];else
+#else
+ if(g>=ZWG)p=(const u8*)"";else
 #endif
  p=(b?MF_D1:MF_D0)+MF_OFF[b][g];
  while((c=*p++)){
@@ -1340,10 +1389,10 @@ static void ptri(int x,int y,int s,int dir,int c){ /* small solid triangle: dir 
 typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex;char*t,*hp;N*nd,*on;}Cmd;
 static Cmd cm[MC],dm;
 static int nc,W,H,cv=0xffffff;
-static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp;
+static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp,tip;
 static Cmd*bulp;static S*curh;
 static int curop=255,curcl=0,isol,fw=-1,fh=-1,fva,fch=-1,ng,ibA[64];
-typedef struct{int x,y,w,h,side;}Fl;static Fl fls[64];static int nf;
+typedef struct{int x,y,w,h,side;}Fl;static Fl flst[64];static int nf;
 typedef struct{int x0,y0,x1,y1,par;}Clp;static Clp clps[512];static int nclp;
 typedef struct{N*n,*cb;int sx,sy;}Ab;static Ab abq[64];static int nab;
 static N*curn;
@@ -1355,12 +1404,12 @@ static int rc(int c,St*s){return c==-3?s->col:c;}
 static void fbounds(int y,int h,int*l,int*r){
  int i;
  *l=cx;*r=cx+cw;
- for(i=0;i<nf;i++)if(y<fls[i].y+fls[i].h&&y+(h>0?h:1)>fls[i].y){
-  if(fls[i].side==1){if(fls[i].x+fls[i].w>*l)*l=fls[i].x+fls[i].w;}
-  else if(fls[i].x<*r)*r=fls[i].x;}}
+ for(i=0;i<nf;i++)if(y<flst[i].y+flst[i].h&&y+(h>0?h:1)>flst[i].y){
+  if(flst[i].side==1){if(flst[i].x+flst[i].w>*l)*l=flst[i].x+flst[i].w;}
+  else if(flst[i].x<*r)*r=flst[i].x;}}
 static int fbottom(int mask,int from){
  int i,b=0;
- for(i=from;i<nf;i++)if((mask>>(fls[i].side-1))&1&&fls[i].y+fls[i].h>b)b=fls[i].y+fls[i].h;
+ for(i=from;i<nf;i++)if((mask>>(flst[i].side-1))&1&&flst[i].y+flst[i].h>b)b=flst[i].y+flst[i].h;
  return b;}
 static void nl(void){
  int i,dx,sl_;
@@ -1380,10 +1429,10 @@ static void ls(int need){
   fbounds(Y,1,&l,&r);
   if(r-l>=need||!nf)break;
   nb=0;
-  for(i=0;i<nf;i++)if(Y<fls[i].y+fls[i].h&&(!nb||fls[i].y+fls[i].h<nb))nb=fls[i].y+fls[i].h;
+  for(i=0;i<nf;i++)if(Y<flst[i].y+flst[i].h&&(!nb||flst[i].y+flst[i].h<nb))nb=flst[i].y+flst[i].h;
   if(nb<=Y)break;
   Y=nb;}
- lx=lsx=l+padp;padp=0;lend=r;
+ lx=lsx=l+padp;padp=0;lend=r;if(tip){lx+=tip;tip=0;}
  if(bulp){bulp->y=bulp->k==1?Y:Y+bulp->a-bulp->h-bulp->fs/10;bulp=0;}}
 static void mt0(St*s,int*as,int*de){
  int fs=s->fs,L,hf;
@@ -1419,7 +1468,7 @@ static void txtc(N*n,char*p,int len){ /* collapsed-whitespace text */
     acc=0;k=m=i;
     while(k<j){q=k;a=ADV(tf&1,gi(tfm(u8d(p,j,&q),tf>>2,k==i)));if(m>i&&cw>0&&s->ws!=1&&(((acc+a)*fs+512)>>10)>cw)break;acc+=a;k=q;m=q;}
     word(p+i,m-i,n->par);i=m;}}}}
-static void brk(St*s){int a,h;ls(0);met(s,&a,&h);nl();}
+static void lbrk(St*s){int a,h;ls(0);met(s,&a,&h);nl();}
 static void txt(N*n){
  S t=n->txt;St*s=n->par->s;int i=0,j;
  if(s->ws>=2){ /* pre, pre-wrap, pre-line: newlines are line breaks */
@@ -1428,7 +1477,7 @@ static void txt(N*n){
    if(j>i){
     if(s->ws>=3)txtc(n,t.p+i,j-i);
     else{sp=0;word(t.p+i,j-i,n->par);}}
-   if(j<t.n)brk(s);
+   if(j<t.n)lbrk(s);
    i=j+1;}}
  else txtc(n,t.p,t.n);}
 
@@ -1610,7 +1659,7 @@ static void place_float(N*c){
   fbounds(y,hh,&l,&r);
   if(r-l>=outer||!nf)break;
   nb=0;
-  for(i=0;i<nf;i++)if(y<fls[i].y+fls[i].h&&(!nb||fls[i].y+fls[i].h<nb))nb=fls[i].y+fls[i].h;
+  for(i=0;i<nf;i++)if(y<flst[i].y+flst[i].h&&(!nb||flst[i].y+flst[i].h<nb))nb=flst[i].y+flst[i].h;
   if(nb<=y)break;
   y=nb;}
  x=s->fl==1?l:r-outer;
@@ -1618,7 +1667,7 @@ static void place_float(N*c){
  c0=nc;
  lay_at(c,x,outer,y,wb,-1,0,0);
  for(i=c0;i<nc;i++)cm[i].grp=-1;
- if(nf<64){fls[nf].x=x;fls[nf].y=y;fls[nf].w=outer;fls[nf].h=hh;fls[nf].side=s->fl;nf++;}}
+ if(nf<64){flst[nf].x=x;flst[nf].y=y;flst[nf].w=outer;flst[nf].h=hh;flst[nf].side=s->fl;nf++;}}
 static void walk(N*n){
  N*c;St*s;int a,h,op0,open,closed=0,lpx,rpx;S*old;
  if(seq(n->tag,"details")){open=(getattr(n,"open").p!=0)^(n->det&1);closed=!open;}
@@ -1635,7 +1684,7 @@ static void walk(N*n){
    continue;}
   old=curh;if(c->href.n&&seq(c->tag,"a"))curh=&c->href;
   op0=curop;if(s->op<255)curop=curop*s->op/255;
-  if(seq(c->tag,"br")){brk(s);}
+  if(seq(c->tag,"br")){lbrk(s);}
   else if(s->fl)place_float(c);
   else if(s->disp==D_IB)ibox(c);
   else if(s->disp==D_INLINE){
@@ -1727,7 +1776,7 @@ static void blk_(N*n,int ax,int aw){
   bp=cadd(2,x0,top,tw,0,0);bp->bi=nbx++;bp->ex=shd?(s->shb+s->shs+(s->shx<0?-s->shx:s->shx)+(s->shy<0?-s->shy:s->shy)+2):0;}
  else if(s->bg>=0)bp=cadd(0,x0,top,tw,0,rc(s->bg,s));
  if(!tt)Y+=bt+pt;
- cx=ax+ml+bl+pl;cw=w;ca=s->al;lx=cx;LH=LA=LD=0;sp=0;lf=nc;ys=Y;ng=0;padp=0;
+ cx=ax+ml+bl+pl;cw=w;ca=s->al;lx=cx;LH=LA=LD=0;sp=0;lf=nc;ys=Y;ng=0;padp=0;tip=s->ti;
  if(fhv>=0)hcnt=fhv-ev;
  else if(s->h.k==0&&!s->h.pc)hcnt=s->h.px-(s->bs?ev:0);
  if(hcnt<-1)hcnt=0;
@@ -1979,6 +2028,7 @@ static void doabs(void){
 /* ---- public API ---- */
 int mwe_load(char*html,int len){
  int i;
+ if(len>=3&&(u8)html[0]==0xEF&&(u8)html[1]==0xBB&&(u8)html[2]==0xBF){html+=3;len-=3;}  /* UTF-8 byte order mark */
  ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
  for(i=0;i<4;i++)qb[i]=(i&1)?(1<<30):0;
  css((S){(char*)UA,sl(UA)});
@@ -1994,7 +2044,7 @@ int mwe_layout(int width){
  if(width<16)width=16;
  W=VW=width;
  restyle();
- nc=0;nbx=0;nclp=0;nf=0;nab=0;scp=0;Y=0;pend=0;LH=LA=LD=0;lx=lsx=cx=0;cw=W;lend=W;lf=0;ca=0;sp=0;bulp=0;curh=0;curop=255;curcl=0;isol=0;fw=fh=-1;fva=0;fch=-1;ng=0;padp=0;
+ nc=0;nbx=0;nclp=0;nf=0;nab=0;scp=0;Y=0;pend=0;LH=LA=LD=0;lx=lsx=cx=0;cw=W;lend=W;lf=0;ca=0;sp=0;bulp=0;curh=0;curop=255;curcl=0;isol=0;fw=fh=-1;fva=0;fch=-1;ng=0;padp=0;tip=0;
  walk(root);nl();
  {int ey=Y+pend;doabs();Y=ey;pend=0;}
  H=Y;if(H<1)H=1;if(H>400000)H=400000;

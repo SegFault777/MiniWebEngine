@@ -26,6 +26,14 @@ A small standalone desktop web browser built on [MiniWebEngine](../README.md).
 
 ## HTTPS / TLS
 
+**Secure connections.** The address bar shows a green lock and "Secure" for verified HTTPS and a red
+"Not secure" for http; click it for the connection panel (protocol, cipher suite, certificate name,
+issuer, public key type, validity). Typed addresses use **HTTPS-first**: `http://example.com` and bare
+host names are tried over HTTPS first and fall back to http only if nothing answers on port 443;
+a certificate or handshake error never falls back (localhost, IP addresses, single-label and `.local`
+names, and explicit ports are left alone). `Strict-Transport-Security` is honored for the session, and
+a secure page may not load scripts or style sheets over plain http (mixed content).
+
 A built-in TLS 1.3 / 1.2 client (`tls/`, no external library; TLS 1.3 is preferred, TLS 1.2 is the fallback):
 
 - TLS 1.3 suites: `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`; key exchange X25519;

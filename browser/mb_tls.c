@@ -6,6 +6,44 @@
 #include "mb.h"
 
 static const char *terr = "";
+static mb_tls_info_t tinfo;
+static int tnet;
+static void sset(char *d, int cap, const u8 *s, u32 n) { u32 i; for (i = 0; i + 1 < (u32)cap && i < n; i++) d[i] = (char)s[i]; d[i] = 0; }
+static void put(char *d, int cap, const char *s) { int i = 0; while (s[i] && i + 1 < cap) { d[i] = s[i]; i++; } d[i] = 0; }
+static const char *suite_name(u16 s) {
+    switch (s) {
+    case 0x1301: return "TLS_AES_128_GCM_SHA256";
+    case 0x1302: return "TLS_AES_256_GCM_SHA384";
+    case TLS_SUITE_ECDHE_ECDSA_AES128_GCM_SHA256: return "ECDHE_ECDSA_AES_128_GCM_SHA256";
+    case TLS_SUITE_ECDHE_ECDSA_AES256_GCM_SHA384: return "ECDHE_ECDSA_AES_256_GCM_SHA384";
+    case TLS_SUITE_ECDHE_RSA_AES128_GCM_SHA256:   return "ECDHE_RSA_AES_128_GCM_SHA256";
+    case TLS_SUITE_ECDHE_RSA_AES256_GCM_SHA384:   return "ECDHE_RSA_AES_256_GCM_SHA384";
+    default: return "unknown";
+    }
+}
+static void capture_info(void) {
+    x509_cert_t *leaf = &tls_conn.chain[0];
+    int bits, n;
+    char *k = tinfo.key;
+    tinfo.tls13 = tls_conn.tls13;
+    put(tinfo.suite, sizeof tinfo.suite, suite_name(tls_conn.cipher_suite));
+    sset(tinfo.cn, sizeof tinfo.cn, leaf->cn, leaf->cn_len);
+    tinfo.issuer[0] = 0;
+    if (tls_conn.chain_len > 1) sset(tinfo.issuer, sizeof tinfo.issuer, tls_conn.chain[1].cn, tls_conn.chain[1].cn_len);
+    tinfo.nb = (long long)leaf->not_before; tinfo.na = (long long)leaf->not_after;
+    tinfo.chain = tls_conn.chain_len;
+    if (leaf->ec_group == TLS_GROUP_SECP256R1) put(k, sizeof tinfo.key, "ECDSA P-256");
+    else if (leaf->ec_group == TLS_GROUP_SECP384R1) put(k, sizeof tinfo.key, "ECDSA P-384");
+    else if (leaf->pubkey_valid) {
+        bits = (int)bn_bit_length(&leaf->pubkey_modulus);
+        put(k, sizeof tinfo.key, "RSA ");
+        n = 4; if (bits >= 1000) k[n++] = (char)('0' + bits / 1000 % 10);
+        k[n++] = (char)('0' + bits / 100 % 10); k[n++] = (char)('0' + bits / 10 % 10); k[n++] = (char)('0' + bits % 10);
+        put(k + n, (int)sizeof tinfo.key - n, "-bit");
+    } else put(k, sizeof tinfo.key, "unknown");
+}
+const mb_tls_info_t *mb_tls_info(void) { return &tinfo; }
+int mb_tls_net_failed(void) { return tnet; }
 
 /* civil date from days since 1970-01-01 (proleptic Gregorian) */
 static u64 now_packed(void) {
@@ -56,12 +94,14 @@ int mb_tls_open(const char *host, int port) {
     u8 seed[16] = {0};
     tls_state_t st;
     tcp_host = host;
+    tnet = 0;
     tls_connect(0, (u16)port, host, seed);
     for (;;) {
         st = tls_poll(now_packed());
-        if (st == TLS_ESTABLISHED) return 0;
-        if (st == TLS_FAILED) { terr = why(); tcp_close(); return -1; }
+        if (st == TLS_ESTABLISHED) { capture_info(); return 0; }
+        if (st == TLS_FAILED) { terr = why(); tnet = tls_conn.fail_reason == TLS_FAIL_TCP; tcp_close(); return -1; }
         if (tcp_conn.state == TCP_CLOSED) {
+            tnet = 1;
             terr = st == TLS_WAIT_TCP || tcp_h < 0 ? "Could not connect to the server." : "The connection closed during the TLS handshake (or timed out).";
             tcp_close(); return -1;
         }

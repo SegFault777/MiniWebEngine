@@ -21,6 +21,9 @@ static char pg[PG+1],raw[1<<21];
 static char cur[UC],ub[UC],stt[UC],tmp[UC*2],req[UC*2];
 static char hist[32][512];static int hsy[32],hn,hi;
 static int Wd,Ht,sy,ph,plen,ucur,uf,usel,uoff,hov,ready,sec; /* sec: 0 local page, 1 http, 2 https (verified) */
+static int secpanel,ufirst,quiet,netfail;    /* connection-info panel open; address-bar navigation (HTTPS-first); suppress error pages; last TLS open failed at TCP level */
+static mb_tls_info_t pinfo;static char phost[128];  /* TLS details of the page that is showing */
+static char hsts[16][96];static char hsub[16];static int nhsts;   /* HTTP Strict Transport Security hosts (this session) */
 
 /* ---- tiny string builder ---- */
 static char*bd_;static int bn_,bc_;
@@ -107,9 +110,9 @@ static const char HOME[]=
 "<li>Ctrl+L focuses the address bar; Alt+Left / Alt+Right go back and forward; F5 reloads.</li></ul>"
 "<h2>Supported</h2><p class=k>HTML5 elements, CSS3 selectors, @media, var(), calc(), flexbox, grid, tables, floats, "
 "positioning, gradients, rounded corners, shadows, forms (display only), external stylesheets, a JavaScript subset, "
-"Latin, Greek, Cyrillic and Simplified Chinese text in Noto Sans, HTTPS (TLS 1.3 and 1.2, "
+"Latin, Greek, Cyrillic, Chinese and Korean text in Noto Sans, HTTPS-first with a connection panel (TLS 1.3 and 1.2, "
 "verified certificates; no way to bypass an error).</p>"
-"<h2>Not yet</h2><p class=k>Images, web fonts, Hangul and Traditional-only Chinese characters, and interactive forms. "
+"<h2>Not yet</h2><p class=k>Images, web fonts, legacy text encodings, Traditional-only Chinese characters, and interactive forms. "
 "Pages load synchronously.</p>"
 "<p><a href=\"about:blank\">about:blank</a> &middot; <a href=\"about:licenses\">about:licenses</a> (copyright notices)</p></body></html>";
 static int rdfiled(const char*url,char*dst,int cap,int*olen,int page){
@@ -144,7 +147,8 @@ static int dechunk(char*b,int n){ /* in place */
 static int netget(const char*host,int port,int tls,const char*rq,int rl,char*err,int ecap){
  int n=0,r,h;
  if(tls){
-  if(mb_tls_open(host,port)!=0){cpy(err,ecap,mb_tls_error());return -1;}
+  netfail=0;
+  if(mb_tls_open(host,port)!=0){netfail=mb_tls_net_failed();cpy(err,ecap,mb_tls_error());return -1;}
   if(!mb_tls_send(rq,rl)){mb_tls_close();cpy(err,ecap,"Could not send the request.");return -1;}
   while(n<(int)sizeof raw-1){r=mb_tls_recv(raw+n,(int)sizeof raw-1-n);if(r<=0)break;n+=r;}
   mb_tls_close();
@@ -155,10 +159,51 @@ static int netget(const char*host,int port,int tls,const char*rq,int rl,char*err
  while(n<(int)sizeof raw-1){r=mb_plat_recv(h,raw+n,(int)sizeof raw-1-n);if(r<=0)break;n+=r;}
  mb_plat_close(h);
  return n>0?n:-1;}
-#define EP(a,b,c) do{if(page)errpage(a,b,c);}while(0)
+/* ---- HSTS: once a host sent Strict-Transport-Security over verified HTTPS, plain http:// to it is rewritten ---- */
+static int hostof(const char*u,char*h,int cap,int*port,const char**rest){
+ const char*p=u+(has(u,"https://")?8:7);int i=0;
+ while(*p&&*p!='/'&&*p!=':'&&*p!='?'&&*p!='#'&&i<cap-1){h[i]=(*p>='A'&&*p<='Z')?*p+32:*p;i++;p++;}
+ h[i]=0;*port=0;
+ if(*p==':'){p++;while(dig(*p)){*port=*port*10+*p-'0';p++;}}
+ *rest=p;return i>0;}
+static int cmpi(const char*a,const char*b){while(*a&&lw(*a)==lw(*b)){a++;b++;}return lw(*a)-lw(*b);}
+static const char*findci(const char*s,const char*p){int n=len(p),i;for(;*s;s++){for(i=0;i<n&&s[i]&&lw(s[i])==lw(p[i]);i++){}if(i==n)return s;}return 0;}
+static int hsts_match(const char*h){
+ int i,hl=len(h),l;
+ for(i=0;i<nhsts;i++){
+  if(!cmpi(h,hsts[i]))return 1;
+  l=len(hsts[i]);
+  if(hsub[i]&&hl>l+1&&h[hl-l-1]=='.'&&!cmpi(h+hl-l,hsts[i]))return 1;}
+ return 0;}
+static void hsts_upgrade(char*url){
+ char h[128],t[UC];const char*rest;int port;
+ if(!has(url,"http://")||!hostof(url,h,sizeof h,&port,&rest)||!hsts_match(h)||(port&&port!=80))return;
+ bs(t,sizeof t);ba("https://");ba(h);ba(rest);cpy(url,UC,t);}
+static void hsts_note(const char*host,const char*val){
+ const char*m=findci(val,"max-age=");int age=0,i,k;char h[96];
+ if(!m)return;
+ m+=8;while(dig(*m)){if(age<100000000)age=age*10+*m-'0';m++;}
+ cpy(h,sizeof h,host);for(k=0;h[k];k++)if(h[k]>='A'&&h[k]<='Z')h[k]+=32;
+ for(i=0;i<nhsts;i++)if(!cmpi(hsts[i],h))break;
+ if(!age){if(i<nhsts){for(;i+1<nhsts;i++){cpy(hsts[i],96,hsts[i+1]);hsub[i]=hsub[i+1];}nhsts--;}return;}
+ if(i==nhsts){if(nhsts>=16)return;nhsts++;cpy(hsts[i],96,h);}
+ hsub[i]=findci(val,"includesubdomains")!=0;}
+/* HTTPS-first applies to ordinary public host names only (not localhost, IP literals, single-label or .local names, explicit ports) */
+static int upgradable(const char*u){
+ char h[128];const char*rest;int port,i,dot=0;
+ if(!hostof(u,h,sizeof h,&port,&rest)||port)return 0;
+ if(h[0]=='['||(h[0]>='0'&&h[0]<='9'))return 0;
+ if(!cmpi(h,"localhost"))return 0;
+ for(i=0;h[i];i++)if(h[i]=='.')dot++;
+ if(!dot)return 0;
+ i=len(h);if(i>6&&!cmpi(h+i-6,".local"))return 0;
+ return 1;}
+#define EP(a,b,c) do{if(page&&!quiet)errpage(a,b,c);}while(0)
 static int httpd(char*url,char*dst,int cap,int*olen,int page){
  int rd,n,i,port,st,he,bl,hl,tls;char host[256],path[UC],loc[UC],tc[64],ct[96],err[256];const char*p;
  for(rd=0;rd<6;rd++){
+  hsts_upgrade(url);
+  if(!page&&sec==2&&!has(url,"https://"))return 0;   /* mixed content: a secure page may not pull scripts/styles over http */
   tls=has(url,"https://");
   p=url+(tls?8:7);i=0;port=tls?443:80;
   while(*p&&*p!='/'&&*p!=':'&&*p!='?'&&*p!='#'&&i<255)host[i++]=*p++;
@@ -179,6 +224,7 @@ static int httpd(char*url,char*dst,int cap,int*olen,int page){
   for(he=0;he+3<n;he++)if(raw[he]=='\r'&&raw[he+1]=='\n'&&raw[he+2]=='\r'&&raw[he+3]=='\n')break;
   if(he+3>=n||!has(raw,"HTTP/")){EP("Bad response","The server sent something that is not HTTP.",url);return 0;}
   hl=he+2;
+  if(tls&&hdr(raw,hl,"strict-transport-security:",tc,sizeof tc))hsts_note(host,tc);
   st=0;for(i=0;raw[i]&&raw[i]!=' ';i++);
   while(raw[i]==' ')i++;
   while(dig(raw[i]))st=st*10+raw[i++]-'0';
@@ -191,7 +237,7 @@ static int httpd(char*url,char*dst,int cap,int*olen,int page){
    EP("Unsupported content","MiniBrowser can only display HTML and plain text.",url);return 0;}
   if(bl>cap-1)bl=cap-1;
   for(i=0;i<bl;i++)dst[i]=p[i];
-  dst[bl]=0;*olen=bl;if(page)sec=tls?2:1;
+  dst[bl]=0;*olen=bl;if(page){sec=tls?2:1;if(tls){pinfo=*mb_tls_info();cpy(phost,sizeof phost,host);}}
   return 1;}
  EP("Too many redirects","The server redirected too many times.",url);return 0;}
 
@@ -266,7 +312,7 @@ static void pump(void){ /* console output, alert() and location changes requeste
 static void load(char*url){
  int i;
  nloads++;
- sec=0;
+ sec=0;secpanel=0;ufirst&=1;
  if(has(url,"about:")){
   if(has(url,"about:licenses")){
    int ln;
@@ -277,7 +323,15 @@ static void load(char*url){
   else cpy(pg,PG,HOME);
   plen=len(pg);}
  else if(has(url,"file:"))rdfiled(url,pg,PG,&plen,1);
- else if(has(url,"http"))http(url);
+ else if(has(url,"http")){
+  if(ufirst&&has(url,"http://")&&upgradable(url)){       /* HTTPS-first for typed addresses: fall back to http only if nothing answers on 443 */
+   char su[UC];int ok;
+   bs(su,sizeof su);ba("https://");ba(url+7);
+   quiet=1;ok=http(su);quiet=0;
+   if(ok)cpy(url,UC,su);
+   else if(netfail)http(url);
+   else{bs(su,sizeof su);ba("https://");ba(url+7);http(su);cpy(url,UC,su);}}
+  else http(url);}
  else errpage("Unsupported address","This address type is not supported.",url);
  cpy(cur,UC,url);cpy(ub,UC,cur);ucur=len(ub);usel=0;uoff=0;
  mwe_load(pg,plen);ready=1;
@@ -311,10 +365,11 @@ static void hgo(int d){
  sy=hsy[hi];relayout();}
 void mb_init(const char*start,int w,int h){
  Wd=w;Ht=h;sy=0;hn=hi=0;uf=0;
- go(start&&start[0]?start:"about:home",1);}
+ ufirst=1;go(start&&start[0]?start:"about:home",1);ufirst=0;}
 void mb_resize(int w,int h){Wd=w;Ht=h;if(ready)relayout();}
 
 /* ---- drawing ---- */
+static void secdraw(unsigned*px);
 static void fillr(unsigned*px,int x,int y,int w,int h,unsigned c){mwe_rect(px,Wd,Wd,Ht,x,y,w,h,c);}
 static void seg(unsigned*px,int x0,int y0,int x1,int y1,unsigned c){
  int dx=x1-x0,dy=y1-y0,n=(dx<0?-dx:dx)>(dy<0?-dy:dy)?(dx<0?-dx:dx):(dy<0?-dy:dy),i;
@@ -333,7 +388,7 @@ static void icons(unsigned*px){
  seg(px,cx+3,cy-8,cx+8,cy-8,on);seg(px,cx+8,cy-8,cx+8,cy-3,on);}
 static int caretx(int idx){return mwe_textw(ub,idx,14,0);}
 static const char*badge(void){return sec==2?"Secure":sec==1?"Not secure":"";}
-static int badgew(void){const char*b=badge();return b[0]?mwe_textw(b,len(b),12,1)+14:0;}
+static int badgew(void){const char*b=badge();return b[0]?mwe_textw(b,len(b),12,1)+14+(sec==2?14:0):0;}
 void mb_draw(unsigned*px){
  int i,cw=Wd-SBW,chh=Ht-TB-SBH,bx=120,bw=Wd-bx-10,tx,cxp,th,ty,mx,bwid,t0,av,sw;const char*bt;
  if(cw<32)cw=32;
@@ -344,7 +399,10 @@ void mb_draw(unsigned*px){
  fillr(px,bx,7,bw,TB-14,uf?0x1A73E8:0xDADCE0);fillr(px,bx+1,8,bw-2,TB-16,0xFFFFFF);
  bwid=badgew();t0=bx+10+bwid;av=bw-20-bwid;
  bt=badge();
- if(bwid){mwe_text(px,Wd,Wd,Ht,bx+10,TB/2+4,bt,len(bt),12,1,sec==2?0x137333:0xB3261E,bx,bx+bw);fillr(px,t0-7,13,1,TB-26,0xDADCE0);}
+ if(bwid){
+  unsigned lc=sec==2?0x137333:0xB3261E;int lw_=sec==2?14:0,cy=TB/2;
+  if(sec==2){fillr(px,bx+12,cy-9,6,2,lc);fillr(px,bx+12,cy-9,2,5,lc);fillr(px,bx+16,cy-9,2,5,lc);fillr(px,bx+10,cy-5,10,8,lc);fillr(px,bx+14,cy-3,2,3,0xFFFFFF);}
+  mwe_text(px,Wd,Wd,Ht,bx+10+lw_,TB/2+4,bt,len(bt),12,1,lc,bx,bx+bw);fillr(px,t0-7,13,1,TB-26,0xDADCE0);}
  cxp=caretx(ucur);
  if(cxp-uoff>av-14)uoff=cxp-(av-14);
  if(cxp<uoff)uoff=cxp;
@@ -366,7 +424,41 @@ void mb_draw(unsigned*px){
  fillr(px,0,Ht-SBH,Wd,SBH,0xF1F3F4);fillr(px,0,Ht-SBH,Wd,1,0xDADCE0);
  mwe_text(px,Wd,Wd,Ht,10,Ht-8,stt,len(stt),12,0,0x5F6368,0,Wd-10);
  i=mwe_textw("MiniWebEngine " MWE_VERSION,sizeof("MiniWebEngine " MWE_VERSION)-1,12,0);
- if(Wd>i+300)mwe_text(px,Wd,Wd,Ht,Wd-i-10,Ht-8,"MiniWebEngine " MWE_VERSION,sizeof("MiniWebEngine " MWE_VERSION)-1,12,0,0x80868B,0,Wd);}
+ if(Wd>i+300)mwe_text(px,Wd,Wd,Ht,Wd-i-10,Ht-8,"MiniWebEngine " MWE_VERSION,sizeof("MiniWebEngine " MWE_VERSION)-1,12,0,0x80868B,0,Wd);
+ if(secpanel)secdraw(px);}
+
+/* ---- connection-info panel (click the lock / "Not secure" badge) ---- */
+static void fdate(char*o,long long v){
+ int y=(int)(v/10000000000LL),m=(int)(v/100000000LL%100),d=(int)(v/1000000LL%100);
+ o[0]='0'+y/1000%10;o[1]='0'+y/100%10;o[2]='0'+y/10%10;o[3]='0'+y%10;o[4]='-';o[5]='0'+m/10;o[6]='0'+m%10;o[7]='-';o[8]='0'+d/10;o[9]='0'+d%10;o[10]=0;}
+static void secdraw(unsigned*px){
+ int x=120,y=TB-2,w=Wd-x-10,yy,i;char ln[300],d1[12],d2[12];
+ unsigned col=sec==2?0x137333:0xB3261E;
+ const char*rows[6][2];int nr=0;
+ if(w>460)w=460;
+ if(w<200||!sec)return;
+ if(sec==2){
+  rows[nr][0]="Protocol";rows[nr++][1]=pinfo.tls13?"TLS 1.3":"TLS 1.2";
+  rows[nr][0]="Encryption";rows[nr++][1]=pinfo.suite;
+  rows[nr][0]="Certificate";rows[nr++][1]=pinfo.cn;
+  if(pinfo.issuer[0]){rows[nr][0]="Issued by";rows[nr++][1]=pinfo.issuer;}
+  rows[nr][0]="Public key";rows[nr++][1]=pinfo.key;
+  fdate(d1,pinfo.nb);fdate(d2,pinfo.na);bs(ln,sizeof ln);ba(d1);ba("  to  ");ba(d2);
+  rows[nr][0]="Valid";rows[nr++][1]=ln;}
+ yy=sec==2?y+22+nr*20+44:y+22+58;
+ fillr(px,x-1,y-1,w+2,yy-y+2,0xDADCE0);fillr(px,x,y,w,yy-y,0xFFFFFF);
+ mwe_text(px,Wd,Wd,Ht,x+14,y+22,sec==2?"Connection is secure":"Connection is not secure",sec==2?20:24,14,1,col,x,x+w);
+ if(sec==2){
+  static const char n1[]="The certificate chain, validity period and host name were",n2[]="verified. Data sent to this site is encrypted.";
+  for(i=0;i<nr;i++){
+   mwe_text(px,Wd,Wd,Ht,x+14,y+46+i*20,rows[i][0],len(rows[i][0]),12,0,0x5F6368,x,x+w);
+   mwe_text(px,Wd,Wd,Ht,x+104,y+46+i*20,rows[i][1],len(rows[i][1]),12,0,0x202124,x,x+w-8);}
+  mwe_text(px,Wd,Wd,Ht,x+14,y+46+nr*20+14,n1,len(n1),11,0,0x5F6368,x,x+w);
+  mwe_text(px,Wd,Wd,Ht,x+14,y+46+nr*20+30,n2,len(n2),11,0,0x5F6368,x,x+w);}
+ else{
+  static const char n3[]="Anything you send to this site can be read by others",n4[]="on the network. Do not enter passwords or personal data.";
+  mwe_text(px,Wd,Wd,Ht,x+14,y+46,n3,len(n3),12,0,0x202124,x,x+w);
+  mwe_text(px,Wd,Wd,Ht,x+14,y+64,n4,len(n4),12,0,0x202124,x,x+w);}}
 
 /* ---- input ---- */
 static int linkat(int x,int y,char*out){
@@ -383,12 +475,14 @@ void mb_move(int x,int y){
  if(h)cpy(stt,UC,u);else cpy(stt,UC,"Done");}
 void mb_click(int x,int y){
  char u[UC];int chh=Ht-TB-SBH,mx,i,a,b;
+ if(secpanel&&!(y<TB&&y>=8&&y<38&&x>=120&&badgew()&&x<120+10+badgew())){secpanel=0;if(y>=TB)return;}
  if(y<TB){
   if(y>=8&&y<38){
    if(x>=8&&x<38){hgo(-1);return;}
    if(x>=44&&x<74){hgo(1);return;}
    if(x>=80&&x<110){go(cur,0);return;}}
   if(x>=120&&x<Wd-10){
+   if(badgew()&&x<120+10+badgew()){secpanel=!secpanel;return;}
    if(!uf){uf=1;usel=1;return;}
    usel=0;
    x-=130+badgew()-uoff;ucur=0;
@@ -445,13 +539,14 @@ void mb_paste(const char*s,int n){
  ins(b,o);}
 void mb_key(int k){
  int chh=Ht-TB-SBH,mx=ph-chh,l,i;
+ if(secpanel&&k==MBK_ESC){secpanel=0;return;}
  if(k==MBK_FOCUS_URL){uf=1;usel=1;return;}
  if(k==MBK_BACK){hgo(-1);return;}
  if(k==MBK_FORWARD){hgo(1);return;}
  if(k==MBK_F5){go(cur,0);return;}
  if(uf){
   l=len(ub);
-  if(k==MBK_ENTER){uf=0;usel=0;go(ub,1);}
+  if(k==MBK_ENTER){uf=0;usel=0;ufirst=1;go(ub,1);ufirst=0;}
   else if(k==MBK_ESC){uf=0;usel=0;cpy(ub,UC,cur);ucur=len(ub);}
   else if(k==MBK_BACKSPACE){
    if(usel){ub[0]=0;ucur=0;usel=0;}

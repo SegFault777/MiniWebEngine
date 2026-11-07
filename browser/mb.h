@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.5"
+#define MB_VERSION "0.6"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* A blocking TCP socket with a receive timeout (about 15 s). */
@@ -18,12 +18,23 @@ void mb_plat_log(const char *utf8, int n);              /* console.log output (a
 void mb_plat_title(const char *utf8, int n);
 void mb_plat_cursor(int hand);
 
-/* ---- TLS 1.2 client, implemented by mb_tls.c on top of the platform socket ---- */
+/* ---- TLS 1.3 / 1.2 client, implemented by mb_tls.c on top of the platform socket ---- */
 int  mb_tls_open(const char *host, int port);           /* 0 = handshake done and certificate verified */
 int  mb_tls_send(const void *buf, int n);               /* 1 ok, 0 failed */
 int  mb_tls_recv(void *buf, int cap);                   /* >0 bytes; 0 end of data; -1 error */
 void mb_tls_close(void);
 const char *mb_tls_error(void);                         /* human-readable reason after a failure */
+int  mb_tls_net_failed(void);                           /* 1 if the last open failed at TCP level (nothing listens / no TLS) */
+typedef struct {                                        /* what was negotiated and verified on the last successful open */
+    int  tls13;                 /* 1 = TLS 1.3, 0 = TLS 1.2 */
+    char suite[40];             /* e.g. TLS_AES_256_GCM_SHA384 */
+    char cn[128];               /* certificate common name (leaf) */
+    char issuer[128];           /* common name of the next certificate in the chain, "" if the server sent none */
+    char key[24];               /* "ECDSA P-256", "RSA 2048-bit", ... */
+    long long nb, na;           /* validity, packed YYYYMMDDHHMMSS */
+    int  chain;                 /* certificates sent by the server */
+} mb_tls_info_t;
+const mb_tls_info_t *mb_tls_info(void);
 
 /* ---- implemented by the core ---- */
 enum { MBK_BACKSPACE = 1, MBK_DELETE, MBK_ENTER, MBK_LEFT, MBK_RIGHT, MBK_HOME, MBK_END,
