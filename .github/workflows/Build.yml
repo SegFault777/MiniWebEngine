@@ -33,7 +33,7 @@ jobs:
       - name: Check licence files are present
         run: |
           test -f NOTICE.md && test -f fonts/OFL-NotoSansCJK.txt
-          grep -q "Adobe" mwe_font.h
+          grep -q "Adobe" src/mwe_font.h
 
       - name: Build engine CLI
         run: |
@@ -57,6 +57,8 @@ jobs:
           ./mwe test5.html css.bmp 620 && test -s css.bmp
           ./mwe test6.html img.bmp 640 && test -s img.bmp
           ./mwe test8.html is.bmp 520 && test -s is.bmp
+          ./mwe test10.html fit.bmp 640 && test -s fit.bmp
+          ./mwe test11.html flex.bmp 400 && test -s flex.bmp
 
       - name: No libc/POSIX name clashes (macOS SDK declares fls, ffs, ...)
         run: cc -std=gnu11 -fsyntax-only -Wall -Wextra tests/clash.c
@@ -66,6 +68,9 @@ jobs:
 
       - name: Embedded root certificates parse and are usable
         run: cc -std=gnu11 -O1 -Wall -Wextra tests/roots_check.c -o roots_check && ./roots_check
+
+      - name: Strict build without the legacy root tier compiles
+        run: cc -std=gnu11 -fsyntax-only -Wall -Wextra -DMWE_LIB -DMB_NO_LEGACY_ROOTS browser/mb_tls.c
 
       - name: Image decoders match Pillow
         run: |

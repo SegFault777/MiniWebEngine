@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.7** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.8** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -47,7 +47,7 @@ cc -std=c99 -Os -DMWE_LIB -c mwe.c
 ## Fonts
 
 v0.6 uses the **Noto Sans** family only: every glyph (Latin, Greek, Cyrillic, Simplified Chinese, Hangul;
-Regular + Bold) is an outline of **Noto Sans CJK** (SC and KR faces), embedded in `mwe_font.h`. CJK text wraps
+Regular + Bold) is an outline of **Noto Sans CJK** (SC and KR faces), embedded in `src/mwe_font.h`. CJK text wraps
 between characters with basic kinsoku rules (closing punctuation never starts a line). The font is
 under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/README.md](fonts/README.md).
 `mwe --licenses` / `mwe_licenses()` print the notice. Build with `-DMWE_NO_CJK` for a small
@@ -55,7 +55,27 @@ Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
 
-## What is new in v0.7
+## What is new in v0.8
+
+- **Root certificates: 142** (was 116) in two tiers, listed with SHA-256 in `roots/ROOTS.txt` and at
+  `about:roots` in the browser. *Core* (116): the current Mozilla program. *Legacy* (26): roots from an
+  older Mozilla bundle (pip 24.0's vendored certifi) that the current Mozilla bundle no longer contains,
+  e.g. DigiCert Global Root CA, GlobalSign Root CA, Go Daddy/Starfield Class 2, COMODO, GTS R2, Trustwave,
+  QuoVadis, SwissSign. They were filtered: no expired roots and no roots with a known distrust-after
+  (Entrust, AffirmTrust, Chunghwa ePKI; `roots/LEGACY_EXCLUDED.txt`). **Why Mozilla removed each legacy root
+  was not verified here**, and every extra root is extra trust: build with `-DMB_NO_LEGACY_ROOTS` for
+  the strict current-Mozilla set
+- **Modular source**: `mwe.c` (2,300 lines) is split into 16 modules in `src/` and `minibrowser.c` into 6
+  in `browser/` (one translation unit built from `.inc` modules, see `src/README.md`); the preprocessed
+  output and all test renderings are byte-identical to v0.7
+- **CSS**: `object-fit` (fill, contain, cover, none, scale-down) for images; `place-items`,
+  `place-content`, `place-self`; logical sizes (`inline-size`, `block-size`, `min-/max-inline/block-size`);
+  `overflow-wrap: anywhere`
+- **Bug fix**: `align-items` in a fixed-height flex row never centered vertically (the container height was
+  overwritten by the items' own layout); fixed
+- Not supported (unchanged): see the lists under v0.7
+
+## What was new in v0.7
 
 - **Root certificates: 116** (was 82) from the Mozilla program (python-certifi 2026.10.19): 78 RSA and
   38 ECDSA (P-256/P-384) roots, generated and audited by `tools/gen_roots.py`; `roots/ROOTS.txt` lists
@@ -65,7 +85,7 @@ Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
   `roots/SKIPPED.txt`
 - **Images**: `<img>` renders PNG (all colour types and depths, Adam7), JPEG (baseline/sequential, 4:4:4,
   4:2:2, 4:2:0, grey), GIF (first frame, transparency, interlace) and BMP (1/4/8/24/32-bit) from `data:`
-  URIs, files and HTTP(S) (`mwe_img.h`, no dependencies; checked pixel for pixel against Pillow by
+  URIs, files and HTTP(S) (`src/mwe_img.h`, no dependencies; checked pixel for pixel against Pillow by
   `tests/img/run.py`). Images scale with `width`/`height`/CSS, keep their aspect ratio with
   `height:auto`, honour `max-width:100%`, `border-radius` and alpha; a broken image shows its `alt` text.
   API: `mwe_image_count/src/state/set/fail`
@@ -105,7 +125,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.7)
+## Supported (v0.8)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),
@@ -141,7 +161,7 @@ spans, border-spacing, approximate border-collapse, vertical-align), `float` / `
 
 ## JavaScript subset
 
-A tree-walking interpreter (`mwe_js.h`, included by `mwe.c`; about 3,900 lines) with a mark/sweep
+A tree-walking interpreter (`src/mwe_js.h`, included by `mwe.c`; about 3,900 lines) with a mark/sweep
 garbage collector (precise for heap objects, conservative for the C stack, so it can run in the
 middle of a script). Strings are UTF-8; `length`, indexing, `slice` and friends count code points
 (an astral character counts as 1, not 2). Numbers print exactly like V8 (shortest round-trip digits,
@@ -207,13 +227,13 @@ engine (Win32 + a portable core) with HTTP and verified HTTPS (TLS 1.3 and 1.2).
 ## Project layout
 
 ```
-mwe.c, mwe.h            engine (CLI when built without -DMWE_LIB) and its public API
-mwe_font.h              generated font data (see fonts/)
-mwe_js.h                JavaScript engine (included by mwe.c; not a separate translation unit)
-tools/genfont.py        TTF -> mwe_font.h converter (needs fonttools; build-time only)
+mwe.c, mwe.h            engine entry point (CLI when built without -DMWE_LIB; includes src/*.inc) and its public API
+src/                    engine modules (see src/README.md); src/mwe_font.h generated font data, src/mwe_js.h JavaScript engine, src/mwe_img.h image decoders
+tools/genfont.py        TTF -> src/mwe_font.h converter (needs fonttools; build-time only)
 tests/                  JavaScript regression tests (`sh tests/js/run.sh`) and the jt.c event/timer driver
 fonts/                  font licenses and notes
-browser/                MiniBrowser (+ browser/tls: TLS 1.3 / 1.2 client and crypto)
+browser/                MiniBrowser (modules mb_*.inc; browser/tls: TLS 1.3 / 1.2 client and crypto)
+roots/                  trusted root list (ROOTS.txt), legacy/skipped/excluded lists, source PEM bundles
 test.html, test2.html   sample pages (test2.html exercises the dev2 features; browser/tests/pages/js_demo.html the JS)
 .github/workflows/      CI (Linux, Windows, macOS)
 ```

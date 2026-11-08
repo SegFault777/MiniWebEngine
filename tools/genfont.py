@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Convert fonts into mwe_font.h for MiniWebEngine v0.4.
+"""Convert fonts into src/mwe_font.h for MiniWebEngine.
 
     pip install fonttools
     python3 tools/genfont.py Inter-Regular.otf Inter-Bold.otf \
-        --cjk NotoSansCJK-Regular.ttc --cjk-index 2 -o mwe_font.h
+        --cjk NotoSansCJK-Regular.ttc --cjk-index 2 -o src/mwe_font.h
 
 Latin: Regular + Bold (ASCII, Latin-1, Latin Extended-A, Greek, Cyrillic, typographic symbols).
 CJK (optional): one weight, the GB2312 repertoire (6763 hanzi + symbols/kana/pinyin) plus CJK
@@ -131,7 +131,7 @@ def cstr(s):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('regular'); ap.add_argument('bold')
-    ap.add_argument('-o', '--out', default='mwe_font.h')
+    ap.add_argument('-o', '--out', default='src/mwe_font.h')
     ap.add_argument('--latin-index', type=int, default=None, help='face index when the Latin fonts are .ttc files')
     ap.add_argument('--name', help='font label embedded in the header')
     ap.add_argument('--cjk', help='CJK font file (OTF/TTF/TTC); omit for a Latin-only build')

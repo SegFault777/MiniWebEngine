@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Image decoder regression test: generates PNG/BMP/GIF/JPEG files with Pillow, decodes them with
-mwe_img.h (tests/img/dec.c) and compares every pixel with Pillow's own decoding.
+src/mwe_img.h (tests/img/dec.c) and compares every pixel with Pillow's own decoding.
 Lossless formats must match exactly; JPEG must stay within +-4 per channel (mean < 0.5).
 Progressive JPEG must be reported as unsupported. Run: python3 tests/img/run.py  (needs Pillow, a C compiler)."""
 import os, subprocess, sys, tempfile, zlib, struct, random

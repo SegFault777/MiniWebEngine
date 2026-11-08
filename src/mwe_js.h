@@ -1,5 +1,5 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.7)
+ * MiniWebEngine JavaScript subset (v0.8)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */

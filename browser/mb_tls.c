@@ -43,6 +43,12 @@ static void capture_info(void) {
     } else put(k, sizeof tinfo.key, "unknown");
 }
 const mb_tls_info_t *mb_tls_info(void) { return &tinfo; }
+int mb_root_count(void) { return TRUSTED_ROOT_COUNT; }
+const char *mb_root_name(int i, int *legacy, const char **sha) {
+    if (i < 0 || i >= TRUSTED_ROOT_COUNT) { *legacy = 0; *sha = ""; return ""; }
+    *legacy = trusted_root_legacy[i]; *sha = trusted_root_sha256[i];
+    return trusted_root_names[i];
+}
 int mb_tls_net_failed(void) { return tnet; }
 
 /* civil date from days since 1970-01-01 (proleptic Gregorian) */

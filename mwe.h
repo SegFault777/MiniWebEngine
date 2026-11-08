@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.7 public API (build mwe.c with -DMWE_LIB to embed it). */
+/* MiniWebEngine v0.8 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.7"
+#define MWE_VERSION "0.8"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */

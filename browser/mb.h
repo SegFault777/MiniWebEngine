@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.7"
+#define MB_VERSION "0.8"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* A blocking TCP socket with a receive timeout (about 15 s). */
@@ -35,6 +35,8 @@ typedef struct {                                        /* what was negotiated a
     int  chain;                 /* certificates sent by the server */
 } mb_tls_info_t;
 const mb_tls_info_t *mb_tls_info(void);
+int  mb_root_count(void);                               /* trusted root certificates compiled in */
+const char *mb_root_name(int i, int *legacy, const char **sha256hex);   /* name; legacy=1 for the legacy tier */
 
 /* ---- implemented by the core ---- */
 enum { MBK_BACKSPACE = 1, MBK_DELETE, MBK_ENTER, MBK_LEFT, MBK_RIGHT, MBK_HOME, MBK_END,
