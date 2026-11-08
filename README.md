@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.6** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.7** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -55,23 +55,29 @@ Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
 
-## What is new in v0.6
+## What is new in v0.7
 
-- **macOS build fix**: the global `fls` clashed with the BSD `fls()` declared by macOS `<string.h>`; it
-  is renamed, `brk`/`jnl` (libc names) too, and `tests/clash.c` guards against this in CI
-- **Korean**: Noto Sans CJK KR Hangul (KS X 1001, 2350 syllables + jamo) is embedded
-- **Strict UTF-8 decoding** (RFC 3629): overlong forms, surrogates, values above U+10FFFF, stray and
-  truncated bytes become U+FFFD one error at a time and decoding resynchronizes; a UTF-8 BOM is skipped;
-  numeric entities in 0x80-0x9F follow windows-1252 and `&#0;` becomes U+FFFD; about 90 more named
-  entities; zero-width and soft-hyphen characters have no width; `text-transform` maps Latin-1,
-  Latin Extended-A, Greek and Cyrillic case
-- **CSS/HTML**: `text-indent`; default styles for `code`, `kbd`, `samp`, `abbr[title]`, `progress`,
-  `meter`, `ruby`/`rt`/`rp`, `nobr`
-- **HTTPS in MiniBrowser**: lock icon and a connection panel (protocol, cipher suite, certificate name,
-  issuer, key type, validity) opened by clicking the badge; **HTTPS-first** for typed addresses (falls
-  back to http only when nothing answers on port 443, never after a certificate error); **HSTS** for
-  the session; **mixed-content blocking** (a secure page cannot load scripts/styles over http)
-- Not supported: Hangul syllables outside KS X 1001, legacy encodings (EUC-KR, GBK, ...), images
+- **Root certificates: 116** (was 82) from the Mozilla program (python-certifi 2026.10.19): 78 RSA and
+  38 ECDSA (P-256/P-384) roots, generated and audited by `tools/gen_roots.py`; `roots/ROOTS.txt` lists
+  them with SHA-256. Mozilla has since *removed* 13 roots that v0.6 still carried (older DigiCert,
+  GTS R2, COMODO, Trustwave and emSign roots, see `roots/REMOVED.txt`); servers whose chain ends in one of
+  those no longer validate, exactly as in current Firefox. The one unsupported root (ECDSA P-521) is in
+  `roots/SKIPPED.txt`
+- **Images**: `<img>` renders PNG (all colour types and depths, Adam7), JPEG (baseline/sequential, 4:4:4,
+  4:2:2, 4:2:0, grey), GIF (first frame, transparency, interlace) and BMP (1/4/8/24/32-bit) from `data:`
+  URIs, files and HTTP(S) (`mwe_img.h`, no dependencies; checked pixel for pixel against Pillow by
+  `tests/img/run.py`). Images scale with `width`/`height`/CSS, keep their aspect ratio with
+  `height:auto`, honour `max-width:100%`, `border-radius` and alpha; a broken image shows its `alt` text.
+  API: `mwe_image_count/src/state/set/fail`
+- **CSS**: `:is()` / `:where()` selector lists, `aspect-ratio`, `text-shadow` (first shadow, no blur),
+  plus the v0.6 additions
+- Not supported: progressive and arithmetic JPEG, CMYK JPEG, animated GIF (first frame only), WebP, SVG,
+  `srcset`/`<picture>`, lazy loading, CSS `background-image: url()`, `object-fit`
+
+**CSS/HTML coverage is broad but not complete** - "perfect" support would take a full browser. Missing
+among the common features: `z-index` stacking, CSS counters, `::first-letter`/`::first-line`, `:has()`,
+`@font-face`, `@keyframes`/transitions (static render), multi-column layout, `text-overflow: ellipsis`,
+`position: sticky`, bidirectional text and complex scripts (Arabic, Indic, Thai).
 
 ## Library API
 
@@ -99,7 +105,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.6)
+## Supported (v0.7)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),

@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.5 public API (build mwe.c with -DMWE_LIB to embed it). */
+/* MiniWebEngine v0.7 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.6"
+#define MWE_VERSION "0.7"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -22,6 +22,15 @@ int  mwe_click(int x, int y);
  * back with mwe_add_css() (the buffer must stay valid); then call mwe_layout() again. */
 const char *mwe_stylesheet(int i, int *len);
 void mwe_add_css(char *css, int len);
+/* Images (<img src>): PNG, JPEG (baseline), GIF (first frame) and BMP; data: URIs (base64) are decoded by the
+ * engine itself. For other sources the host lists the pending ones after mwe_load()/mwe_layout(), fetches the
+ * bytes and passes them with mwe_image_set() (decoded immediately; the bytes need not stay valid), then calls
+ * mwe_layout() again. State: 0 pending, 1 decoded, 2 failed. */
+int  mwe_image_count(void);
+const char *mwe_image_src(int i, int *len);
+int  mwe_image_state(int i);
+int  mwe_image_set(int i, const unsigned char *data, int len);   /* 1 = decoded */
+void mwe_image_fail(int i);
 unsigned    mwe_bg(void);
 const char *mwe_font_name(void);
 /* Copyright and licence notices of the engine and the embedded fonts (UTF-8, static string). */

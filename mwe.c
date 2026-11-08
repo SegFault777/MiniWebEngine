@@ -12,6 +12,7 @@
  */
 #include "mwe.h"
 #include "mwe_font.h"
+#include "mwe_img.h"
 #ifdef MWE_NO_CJK
 #undef MF_CJ_N
 #define MF_CJ_N 0
@@ -29,13 +30,16 @@ typedef struct{int px,pc,k;}Len; /* px + pc% ; k: 0 length, 1 auto, 2 invalid, 3
 enum{D_NONE,D_BLOCK,D_INLINE,D_IB,D_X4,D_TABLE,D_ROW,D_CELL,D_LI,D_RG};
 typedef struct{
  int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,wb,ti,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,
-     shx,shy,shb,shs,shc,gk,ga,gn;
+     shx,shy,shb,shs,shc,gk,ga,gn,tsx,tsy,tsc;
+
+ float ar;
  Len m[4],p[4],w,h,mnw,mxw,mnh,mxh,top,rt,bot,lf,rad[4],fb,gx,gy,gt[12];
  int gtk[12],bw[4],bc[4],bst[4],gcol[6],gpos[6],gpx[6];
  S cont;
 }St;
 typedef struct N N;
 struct N{N*par,*kid,*last,*nx,*pv,*lel;S tag,txt,id,cls,sty,href,at;St*s;int det,gen,x0,y0,x1,y1;void*jw;};
+static int imfor(N*n);
 
 /* ---- arena (no malloc) ---- */
 static long long ar[(1<<24)/8],dmy[64];
@@ -309,7 +313,7 @@ static void defst(St*s,St*pa){
  s->shc=-1;
  for(i=0;i<4;i++){s->bw[i]=3;s->bc[i]=-3;}
  for(i=0;i<12;i++)s->gtk[i]=2;
- if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ti=pa->ti;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
+ if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ti=pa->ti;s->tsx=pa->tsx;s->tsy=pa->tsy;s->tsc=pa->tsc;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
  else{s->fs=16;s->lst=1;s->bsp=2;}}
 #define NV 512
 static S vnm[NV],vvl[NV];static int nvar;
@@ -477,6 +481,17 @@ static void prop(St*s,S k,S v){
  else if(kw(k,"text-align"))s->al=kw(t[0],"center")?1:(kw(t[0],"right")||kw(t[0],"end"))?2:0;
  else if(kw(k,"text-transform"))s->tt=kw(t[0],"uppercase")?1:kw(t[0],"lowercase")?2:kw(t[0],"capitalize")?3:0;
  else if(kw(k,"letter-spacing")){l=lenv(t[0],s->fs);s->ls=l.k==0?l.px:0;}
+ else if(kw(k,"aspect-ratio")){
+  float a_=0,b_=1,*cur=&a_,dv=0;int q;S v=t[0];
+  if(!kw(v,"auto")){
+   if(kw(t[1],"/")){b_=0;dv=0;}
+   for(q=0;q<v.n;q++){
+    if(v.p[q]=='/'){cur=&b_;b_=0;dv=0;continue;}
+    if(v.p[q]=='.'){dv=1;continue;}
+    if(v.p[q]>='0'&&v.p[q]<='9'){if(dv>0){dv*=0.1f;*cur+=(float)(v.p[q]-'0')*dv;}else *cur=*cur*10+(float)(v.p[q]-'0');}}
+   if(kw(t[1],"/")){S v2=t[2];dv=0;b_=0;for(q=0;q<v2.n;q++){if(v2.p[q]=='.'){dv=1;continue;}if(v2.p[q]>='0'&&v2.p[q]<='9'){if(dv>0){dv*=0.1f;b_+=(float)(v2.p[q]-'0')*dv;}else b_=b_*10+(float)(v2.p[q]-'0');}}}
+   if(b_<=0)b_=1;}
+  s->ar=a_>0?b_/a_:0;}
  else if(kw(k,"text-indent")){l=lenv(t[0],s->fs);s->ti=l.k==0?l.px:0;}
  else if(kw(k,"word-break"))s->wb=kw(t[0],"break-all")?1:kw(t[0],"keep-all")?2:0;
  else if(kw(k,"white-space"))s->ws=kw(t[0],"nowrap")?1:kw(t[0],"pre")?2:(kw(t[0],"pre-wrap")||kw(t[0],"break-spaces"))?3:kw(t[0],"pre-line")?4:0;
@@ -575,6 +590,16 @@ static void prop(St*s,S k,S v){
     else{l=lenv(q[i],s->fs);if(l.k==0||l.k==3){x=l.px;if(x>400)x=400;if(x<-400)x=-400;if(nn==0)s->shx=x;else if(nn==1)s->shy=x;else if(nn==2)s->shb=x<0?0:x;else if(nn==3)s->shs=x;nn++;}}}
    if(s->shc==-2||(s->shc==-1&&nn==0))s->shc=-1;
    else if(s->shc==-1&&nn>=2&&0)s->shc=0x000000;}
+  else if(kw(k,"text-shadow")){   /* first shadow only; the blur radius is ignored */
+   S a[4],q[8];int m,nn=0,sc_=-2;
+   s->tsx=s->tsy=0;s->tsc=-1;
+   if(kw(t[0],"none"))return;
+   splitc(v,a,4);
+   m=tk(a[0],q,8);
+   for(i=0;i<m;i++){
+    if((c=clr(q[i]))!=-2)sc_=c==-3?s->col:c;
+    else{l=lenv(q[i],s->fs);if(l.k==0||l.k==3){x=l.px;if(x>50)x=50;if(x<-50)x=-50;if(nn==0)s->tsx=x;else if(nn==1)s->tsy=x;nn++;}}}
+   s->tsc=sc_==-2?s->col:sc_;}
   else if(kw(k,"flex")){
    s->fgrow=0;s->fshr=1000;s->fb=mk(0,0,1);
    if(kw(t[0],"none")){s->fshr=0;return;}
@@ -875,6 +900,38 @@ static int pcomp(S s,int*pi,Cp*c,int*spec,int*pe,int depth){
   if(isa(ch)){st=i;j=i;while(j<s.n&&isal(s.p[j]))j++;c->tag=(S){s.p+st,j-st};*spec+=1;i=j;continue;}
   return 0;}
  *pi=i;return 1;}
+/* :is(a,b) / :where(a,b) with compound alternatives are expanded textually into one selector per alternative
+ * (so "p:is(.x,.y)" becomes "p.x, p.y"); the text lives in xpool for as long as the page does. */
+static char xpool[1<<16];static int xpn;
+static void addsel(S s,S d);
+static int xcompound(S a){int i;if(!a.n)return 0;for(i=0;i<a.n;i++){char c=a.p[i];if(isws(c)||c=='>'||c=='+'||c=='~')return 0;}return 1;}
+static void xexp(S s,S d,int dep){
+ int i,k,lv=0,st=-1,pl=0,np=0,j,a0,dd;S part[8];
+ for(i=0;i<s.n;i++){
+  char c=s.p[i];
+  if(c=='['){while(i<s.n&&s.p[i]!=']')i++;continue;}
+  if(c==':'&&i+4<s.n&&lc(s.p[i+1])=='i'&&lc(s.p[i+2])=='s'&&s.p[i+3]=='('){st=i;pl=4;break;}
+  if(c==':'&&i+7<s.n&&lc(s.p[i+1])=='w'&&lc(s.p[i+2])=='h'&&lc(s.p[i+3])=='e'&&lc(s.p[i+4])=='r'&&lc(s.p[i+5])=='e'&&s.p[i+6]=='('){st=i;pl=7;break;}}
+ if(st<0||dep>2){addsel(s,d);return;}
+ lv=1;k=st+pl;a0=k;
+ while(k<s.n&&lv){
+  if(s.p[k]=='(')lv++;
+  else if(s.p[k]==')'){lv--;if(!lv)break;}
+  else if(s.p[k]==','&&lv==1){if(np>=7){addsel(s,d);return;}part[np++]=(S){s.p+a0,k-a0};a0=k+1;}
+  k++;}
+ if(lv){addsel(s,d);return;}
+ part[np++]=(S){s.p+a0,k-a0};
+ for(j=0;j<np;j++){part[j]=trim(part[j]);if(!xcompound(part[j])){addsel(s,d);return;}}
+ for(j=0;j<np;j++){
+  int tot=st+part[j].n+(s.n-k-1);
+  S ns;
+  if(xpn+tot+1>(int)sizeof xpool){addsel(s,d);return;}
+  ns=(S){xpool+xpn,tot};
+  for(dd=0;dd<st;dd++)xpool[xpn++]=s.p[dd];
+  for(dd=0;dd<part[j].n;dd++)xpool[xpn++]=part[j].p[dd];
+  for(dd=k+1;dd<s.n;dd++)xpool[xpn++]=s.p[dd];
+  xpool[xpn++]=0;
+  xexp(ns,d,dep+1);}}
 static void addsel(S s,S d){
  Rule*r;int i=0,cb,pe=0,sp,k;
  if(nr>=MR)return;
@@ -916,7 +973,7 @@ static int mq1(S q,int*b){
   else if((seq(nm,"hover")&&seq(val,"none"))||(seq(nm,"pointer")&&(seq(val,"coarse")||seq(val,"none")))||(seq(nm,"forced-colors")&&seq(val,"active")))return 0;}
  (void)ok;return 1;}
 static void css(S t){
- int i=0,a,b,d,be,p0,q,sv[4],k,m;S qs[6],pre;
+ int i=0,a,b,d,be,p0,q,sv[4],k,m,lvl;S qs[6],pre;
  while(i<t.n){
   while(i<t.n&&isws(t.p[i]))i++;
   if(i+1<t.n&&t.p[i]=='/'&&t.p[i+1]=='*'){i+=2;while(i+1<t.n&&!(t.p[i]=='*'&&t.p[i+1]=='/'))i++;i+=2;continue;}
@@ -937,8 +994,10 @@ static void css(S t){
     for(k=0;k<4;k++)qb[k]=sv[k];}
    else if((starts(pre,"@supports")&&!(pre.n>10&&(pre.p[10]=='n'||pre.p[10]=='N')))||starts(pre,"@layer"))css((S){t.p+b,d-b});
    continue;}
-  p0=a;
-  for(q=a;q<=be;q++)if(q==be||t.p[q]==','){addsel((S){t.p+p0,q-p0},(S){t.p+b,d-b});p0=q+1;}}}
+  p0=a;lvl=0;
+  for(q=a;q<=be;q++){
+   if(q<be){if(t.p[q]=='('||t.p[q]=='[')lvl++;else if(t.p[q]==')'||t.p[q]==']')lvl--;}
+   if(q==be||(t.p[q]==','&&lvl<=0)){xexp(trim((S){t.p+p0,q-p0}),(S){t.p+b,d-b},0);p0=q+1;}}}}
 /* ---- matching ---- */
 static int hc(S cl,S k){int i=0,a;while(i<cl.n){while(i<cl.n&&isws(cl.p[i]))i++;a=i;while(i<cl.n&&!isws(cl.p[i]))i++;if(i>a&&seqs((S){cl.p+a,i-a},k))return 1;}return 0;}
 static N*nxel(N*n){N*c=n->nx;while(c&&(!c->tag.n||c->gen))c=c->nx;return c;}
@@ -1133,7 +1192,7 @@ static void gens(N*c,St*s){
     if(seq(ty,"password")){int k,o=cpp;for(k=0;k<va.n&&k<48&&cpp<(int)sizeof cpool-8;k++)cpp+=put8(cpool+cpp,0x2022);txt=(S){cpool+o,cpp-o};}
     else txt=va;}
    else if(ph.p&&ph.n){txt=ph;col=0x757575;}}}
- else if(seq(c->tag,"img")){S al_=getattr(c,"alt");if(al_.p&&al_.n)txt=al_;}
+ else if(seq(c->tag,"img")){S al_=getattr(c,"alt");if(al_.p&&al_.n&&imfor(c)<0)txt=al_;}
  else if(seq(c->tag,"select")){N*o=findopt(c);if(o){N*t;for(t=o->kid;t;t=t->nx)if(!t->tag.n){txt=trim(t->txt);break;}}}
  g=findgen(c,3);
  if(!txt.n){if(g)g->s->disp=D_NONE;return;}
@@ -1306,7 +1365,67 @@ static void run(int x,int base,const char*s,int n,int fs,int tf,int ls,int col,i
  if(ul&2)fr(x,base-fs*3/10,w,fs/14+1,col);}
 
 /* ---- rounded boxes, gradients, shadows ---- */
-typedef struct{int r[4],bw[4],bc[4],bg,gk,ga,gn,gc[6],gp[6],gpx[6],shx,shy,shb,shs,shc,x,y,w,h;}Bx;
+/* ---- images: <img src> decoded by mwe_img.h; the host supplies bytes for non-data: URLs ---- */
+#define MAXIMG 64
+typedef struct{S src;unsigned*px;int w,h,st;}Im;   /* st: 0 pending, 1 decoded, 2 failed */
+static Im ims[MAXIMG];static int nims;
+static unsigned ipool[1<<22];static int ipn;       /* decoded pixels, 16 MB */
+static mu8 idat[1<<22];                              /* data: URI payload */
+static int imset(int i,const unsigned char*d,int n){
+ int w=0,h=0,f;
+ if(i<0||i>=nims)return 0;
+ ims[i].st=2;
+ f=mi_probe(d,n,&w,&h);
+ if(!f||(long long)w*h>(long long)((int)(sizeof ipool/sizeof ipool[0])-ipn))return 0;
+ if(!mi_decode(f,d,n,ipool+ipn,w,h))return 0;
+ ims[i].px=ipool+ipn;ims[i].w=w;ims[i].h=h;ims[i].st=1;ipn+=w*h;return 1;}
+static int b64v(int c){return c>='A'&&c<='Z'?c-'A':c>='a'&&c<='z'?c-'a'+26:c>='0'&&c<='9'?c-'0'+52:c=='+'||c=='-'?62:c=='/'||c=='_'?63:-1;}
+static int imdata(int i){   /* data:[mime];base64,PAYLOAD */
+ S u=ims[i].src;int k=5,b64=0,o=0,acc=0,nb=0,v;
+ while(k<u.n&&u.p[k]!=',')k++;
+ if(k>=u.n)return 0;
+ {int j;for(j=5;j+6<=k;j++)if(lc(u.p[j])==';'&&lc(u.p[j+1])=='b'&&lc(u.p[j+2])=='a'&&lc(u.p[j+3])=='s'&&lc(u.p[j+4])=='e'&&u.p[j+5]=='6')b64=1;}
+ if(!b64)return 0;
+ for(k++;k<u.n;k++){
+  v=b64v((u.p[k]));
+  if(v<0)continue;
+  acc=acc<<6|v;nb+=6;
+  if(nb>=8){nb-=8;if(o>=(int)sizeof idat)return 0;idat[o++]=(mu8)(acc>>nb);acc&=(1<<nb)-1;}}
+ return imset(i,idat,o);}
+static int imreg(S src){
+ int i,j;
+ for(i=0;i<nims;i++){if(ims[i].src.n==src.n){for(j=0;j<src.n&&ims[i].src.p[j]==src.p[j];j++){}if(j==src.n)return i;}}
+ if(nims>=MAXIMG)return -1;
+ ims[nims].src=src;ims[nims].px=0;ims[nims].w=ims[nims].h=0;ims[nims].st=0;i=nims++;
+ if(src.n>5&&lc(src.p[0])=='d'&&lc(src.p[1])=='a'&&lc(src.p[2])=='t'&&lc(src.p[3])=='a'&&src.p[4]==':'){if(!imdata(i))ims[i].st=2;}
+ return i;}
+static int imfor(N*n){   /* index of the decoded image for an <img>, registering it on first sight; -1 if none (yet) */
+ S src=getattr(n,"src");int i;
+ if(!src.p||src.n<=0)return -1;
+ i=imreg(src);
+ return i>=0&&ims[i].st==1?i:-1;}
+static void imscan(N*n){N*c;if(n->tag.n==3&&seq(n->tag,"img")){S src=getattr(n,"src");if(src.p&&src.n>0)imreg(src);}for(c=n->kid;c;c=c->nx)imscan(c);}
+typedef struct{int r[4],bw[4],bc[4],bg,gk,ga,gn,gc[6],gp[6],gpx[6],shx,shy,shb,shs,shc,x,y,w,h,im;}Bx;
+/* bilinear sample of image i (0xAARRGGBB) at image-space (u,v) in pixels; returns alpha in the top byte */
+static unsigned imsamp(const Im*m,float u,float v){
+ int x0,y0,x1,y1,k;float fx,fy,wgt[4],a=0,r=0,g=0,b=0;unsigned p;
+ u-=0.5f;v-=0.5f;
+ x0=(int)(u<0?u-1:u);y0=(int)(v<0?v-1:v);fx=u-(float)x0;fy=v-(float)y0;
+ x1=x0+1;y1=y0+1;
+ if(x0<0)x0=0;
+ if(x0>=m->w)x0=m->w-1;
+ if(x1<0)x1=0;
+ if(x1>=m->w)x1=m->w-1;
+ if(y0<0)y0=0;
+ if(y0>=m->h)y0=m->h-1;
+ if(y1<0)y1=0;
+ if(y1>=m->h)y1=m->h-1;
+ wgt[0]=(1-fx)*(1-fy);wgt[1]=fx*(1-fy);wgt[2]=(1-fx)*fy;wgt[3]=fx*fy;
+ for(k=0;k<4;k++){
+  p=m->px[(long long)((k&2)?y1:y0)*m->w+((k&1)?x1:x0)];
+  {float pa=(float)(p>>24)*wgt[k];a+=pa;r+=pa*(float)((p>>16)&255);g+=pa*(float)((p>>8)&255);b+=pa*(float)(p&255);}}
+ if(a<=0.5f)return 0;
+ return ((unsigned)(a+0.5f)<<24)|((unsigned)(r/a+0.5f)<<16)|((unsigned)(g/a+0.5f)<<8)|(unsigned)(b/a+0.5f);}
 static Bx bxs[8192];static int nbx;
 static float sq(float v){float x;int i;if(v<=0)return 0;x=v>1?v*0.5f:1;for(i=0;i<8;i++)x=0.5f*(x+v/x);return x;}
 static float sn(float a){
@@ -1369,6 +1488,12 @@ static void pbox(Bx*b){
    if(!ob)continue;
    bgc=b->gk?gradcol(b,fx,fy):b->bg;
    if(bgc>=0)bp(x,y,bgc,ob);
+   if(b->im>0){
+    int ix=x0+b->bw[3],iy=y0+b->bw[0],iw_=w-b->bw[1]-b->bw[3],ih_=h-b->bw[0]-b->bw[2];
+    if(iw_>0&&ih_>0&&x>=ix&&x<ix+iw_&&y>=iy&&y<iy+ih_){
+     const Im*m=&ims[b->im-1];
+     unsigned ip=imsamp(m,((float)(x-ix)+0.5f)*(float)m->w/(float)iw_,((float)(y-iy)+0.5f)*(float)m->h/(float)ih_);
+     if(ip>>24)bp(x,y,(int)(ip&0xFFFFFF),(int)((ip>>24)*(unsigned)ob/255));}}
    if(hasb){
     int iw=w-b->bw[1]-b->bw[3],ih=h-b->bw[0]-b->bw[2];
     ib=iw>0&&ih>0?cov255(sdrr(fx,fy,(float)(x0+b->bw[3]),(float)(y0+b->bw[0]),(float)iw,(float)ih,ri)):0;
@@ -1386,7 +1511,7 @@ static void ptri(int x,int y,int s,int dir,int c){ /* small solid triangle: dir 
  else{for(i=0;i<=s/2;i++){w=s-2*i;if(w>0)fr(x+i,y+i,w,1,c);}}}
 
 /* ---- layout state and paint list ---- */
-typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex;char*t,*hp;N*nd,*on;}Cmd;
+typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc;char*t,*hp;N*nd,*on;}Cmd;
 static Cmd cm[MC],dm;
 static int nc,W,H,cv=0xffffff;
 static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp,tip;
@@ -1452,7 +1577,7 @@ static void word(char*p,int n,N*e){
  ls(ww);lx+=spw;
  met(s,&a,&h);
  c=cadd(1,lx,0,ww,h,s->vis?-1:rc(s->col,s));
- c->on=e;c->a=a;c->bg=s->disp==D_INLINE&&!s->vis?rc(s->bg,s):-1;c->fs=fs;c->tf=tf;c->u=s->ul;c->t=p;c->n=n;c->vs=s->va;c->ls=s->ls;
+ c->on=e;c->a=a;c->bg=s->disp==D_INLINE&&!s->vis?rc(s->bg,s):-1;c->fs=fs;c->tf=tf;c->u=s->ul;c->tsx=s->tsx;c->tsy=s->tsy;c->tsc=s->tsc;c->t=p;c->n=n;c->vs=s->va;c->ls=s->ls;
  if(curh){c->hp=curh->p;c->hn=curh->n;}
  lx+=ww;sp=0;}
 static void txtc(N*n,char*p,int len){ /* collapsed-whitespace text */
@@ -1568,6 +1693,9 @@ static int minw(const char*p,int n,int fs,int tf,int ls,int wb){
 static void mm(N*n,int*mn,int*mx){
  int lmn=0,lmx=0,bmn=0,bmx=0,spp=0,i,j,w,a,b,ex,spw,tf,fs;N*c;St*s,*ps=n->s;S t;
  if(!ps){*mn=*mx=0;return;}
+ if(n->tag.n==3&&seq(n->tag,"img")&&(i=imfor(n))>=0){   /* replaced element: intrinsic size (or from an explicit height) */
+  w=ims[i].w;if(ps->h.k==0&&!ps->h.pc)w=(int)((float)ps->h.px*(float)ims[i].w/(float)ims[i].h+0.5f);
+  *mn=*mx=w;return;}
  fs=ps->fs;tf=ttf(ps);spw=((ADV(tf&1,0)*fs+512)>>10)+ps->ls;
  for(c=n->kid;c;c=c->nx){
   if(!c->tag.n){
@@ -1732,7 +1860,11 @@ static void bside(int st,int x,int y,int w,int h,int c,int horiz){
 static void blk_(N*n,int ax,int aw);
 static void blk(N*n,int ax,int aw){N*sv=curn;curn=n;blk_(n,ax,aw);curn=sv;}
 static void blk_(N*n,int ax,int aw){
- St*s=n->s;int fwv=fw,fhv=fh,fvv=fva,iso=isol,d=s->disp;
+ St*s=n->s;int fwv=fw,fhv=fh,fvv=fva,iso=isol,d=s->disp,ii=-1;float ar;St sc;
+ if(n->tag.n==3&&seq(n->tag,"img")&&(ii=imfor(n))>=0){   /* decoded image: drop the UA placeholder box (grey fill, 1px border, 16px minimum) */
+  sc=*s;s=&sc;
+  if(s->bg==0xF1F1F1){s->bg=-1;for(ar=0;ar<4;ar++)s->bw[(int)ar]=0;s->mnw=mk(0,0,1);s->mnh=mk(0,0,1);}}
+ ar=ii>=0?(float)ims[ii].h/(float)ims[ii].w:s->ar;
  int ml,mr,mt,mb,pl,pr,pt,pb,bl,br,bt,bb,eh,ev,w,box,cplx,bfc,tt,bt_,top,x0,tw,ys,i,nf0=nf,c0=nc,c1,hcnt=-1,autoh,fin,bh;
  int ocx=cx,ocw=cw,oca=ca,oop=curop,ocl=curcl,as,de,mlA=s->m[3].k==1,mrA=s->m[1].k==1,rad=0,shd=0,cli=-1,lim,fr_;
  Cmd*bp=0;Bx*bx=0;
@@ -1750,6 +1882,8 @@ static void blk_(N*n,int ax,int aw){
  else if(s->w.k==0){w=rl(s->w,aw);if(s->bs)w-=eh;}
  else{
   w=aw-ml-mr-eh;
+  if(ii>=0){w=(s->h.k==0&&!s->h.pc)?(int)((float)(s->h.px-(s->bs?(pt+pb+bt+bb):0))/ar+0.5f):ims[ii].w;if(s->mxw.k==0&&s->mxw.pc){lim=rl(s->mxw,aw)-(s->bs?eh:0);if(w>lim)w=lim;}}
+  else if(ar>0&&s->ar>0&&s->h.k==1&&d==D_IB){int a,b;mm(n,&a,&b);if(b<w)w=b;}
   if(d==D_TABLE){int a,b;mmtable(n,&a,&b);if(b<w)w=b;}}
  if(fwv<0){
   if(s->mxw.k==0&&!s->mxw.pc){lim=s->mxw.px-(s->bs?eh:0);if(w>lim)w=lim;}
@@ -1759,8 +1893,8 @@ static void blk_(N*n,int ax,int aw){
  if(mlA&&mrA){ml=mr=fr_>0?fr_/2:0;}else if(mlA)ml=fr_>0?fr_:0;
  for(i=0;i<4;i++)if(s->rad[i].k==0&&(s->rad[i].px>0||s->rad[i].pc>0))rad=1;
  if(s->shc!=-1&&(s->shx||s->shy||s->shb||s->shs))shd=1;
- box=s->bg>=0||s->gk||bt||bb||bl||br||rad||shd;
- cplx=(rad||s->gk||shd)&&nbx<8192;
+ box=s->bg>=0||s->gk||bt||bb||bl||br||rad||shd||ii>=0;
+ cplx=(rad||s->gk||shd||ii>=0)&&nbx<8192;
  tt=!box&&!pt&&!bfc&&s->h.k==1&&fhv<0;
  bt_=!box&&!pb&&!bfc&&s->h.k==1&&fhv<0;
  if(tt){if(mt>pend)pend=mt;}else{Y+=mt>pend?mt:pend;pend=0;}
@@ -1770,7 +1904,7 @@ static void blk_(N*n,int ax,int aw){
   bx=&bxs[nbx];
   for(i=0;i<(int)sizeof(Bx);i++)((char*)bx)[i]=0;
   for(i=0;i<4;i++){bx->r[i]=rl(s->rad[i],tw);if(bx->r[i]<0)bx->r[i]=0;bx->bw[i]=s->bw[i];bx->bc[i]=rc(s->bc[i],s);}
-  bx->bg=rc(s->bg,s);bx->gk=s->gk;bx->ga=s->ga;bx->gn=s->gn;
+  bx->im=ii+1;bx->bg=rc(s->bg,s);bx->gk=s->gk;bx->ga=s->ga;bx->gn=s->gn;
   for(i=0;i<s->gn;i++){bx->gc[i]=rc(s->gcol[i],s);bx->gp[i]=s->gpos[i];bx->gpx[i]=s->gpx[i];}
   bx->shx=s->shx;bx->shy=s->shy;bx->shb=s->shb;bx->shs=s->shs;bx->shc=shd?rc(s->shc,s):-1;
   bp=cadd(2,x0,top,tw,0,0);bp->bi=nbx++;bp->ex=shd?(s->shb+s->shs+(s->shx<0?-s->shx:s->shx)+(s->shy<0?-s->shy:s->shy)+2):0;}
@@ -1779,6 +1913,7 @@ static void blk_(N*n,int ax,int aw){
  cx=ax+ml+bl+pl;cw=w;ca=s->al;lx=cx;LH=LA=LD=0;sp=0;lf=nc;ys=Y;ng=0;padp=0;tip=s->ti;
  if(fhv>=0)hcnt=fhv-ev;
  else if(s->h.k==0&&!s->h.pc)hcnt=s->h.px-(s->bs?ev:0);
+ else if(ar>0&&s->h.k==1&&(ii>=0||s->ar>0))hcnt=(int)((float)w*ar+0.5f);
  if(hcnt<-1)hcnt=0;
  if(s->ov==1&&nclp<512){cli=nclp++;clps[cli].par=curcl;clps[cli].x0=x0+bl;clps[cli].y0=top+bt;clps[cli].x1=x0+tw-br;clps[cli].y1=top+bt+(hcnt>=0?hcnt+pt+pb:100000);curcl=cli+1;}
  fch=hcnt;
@@ -2028,6 +2163,7 @@ static void doabs(void){
 /* ---- public API ---- */
 int mwe_load(char*html,int len){
  int i;
+ nims=0;ipn=0;xpn=0;
  if(len>=3&&(u8)html[0]==0xEF&&(u8)html[1]==0xBB&&(u8)html[2]==0xBF){html+=3;len-=3;}  /* UTF-8 byte order mark */
  ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
  for(i=0;i<4;i++)qb[i]=(i&1)?(1<<30):0;
@@ -2035,6 +2171,7 @@ int mwe_load(char*html,int len){
  jready=0;jnscr=0;jlevel=0;jrec=1;
  root=parse(html,len);
  jrec=0;
+ imscan(root);
  return full;}
 void mwe_viewport_h(int h){VH=h<100?100:h;}
 void mwe_add_css(char*text,int len){css((S){text,len});}
@@ -2072,6 +2209,7 @@ void mwe_paint(unsigned*buf,int stride,int x,int y,int w,int h){
    case 0:fr(k->x,k->y,k->w,k->h,k->c);break;
    case 1:
     if(k->bg>=0)fr(k->x,k->y,k->w,k->h,k->bg);
+    if(k->tsx||k->tsy)run(k->x+k->tsx,k->y+k->a+k->tsy,k->t,k->n,k->fs,k->tf,k->ls,k->tsc,0,k->w);
     run(k->x,k->y+k->a,k->t,k->n,k->fs,k->tf,k->ls,k->c,k->u,k->w);break;
    case 2:b=&bxs[k->bi];b->x=k->x;b->y=k->y;b->w=k->w;b->h=k->h;pbox(b);break;
    case 4:ptri(k->x,k->y,k->w,k->u,k->c);break;}}
@@ -2089,6 +2227,11 @@ const char*mwe_link(int x,int y,int*len){
   if(k->hn&&x>=k->x&&x<k->x+k->w&&y>=k->y&&y<k->y+k->h){*len=k->hn;return k->hp;}}
  return 0;}
 const char*mwe_title(int*len){*len=ttl.n;return ttl.p;}
+int mwe_image_count(void){return nims;}
+const char*mwe_image_src(int i,int*len){if(i<0||i>=nims)return 0;*len=ims[i].src.n;return ims[i].src.p;}
+int mwe_image_state(int i){return i<0||i>=nims?2:ims[i].st;}
+int mwe_image_set(int i,const unsigned char*data,int len){return imset(i,data,len);}
+void mwe_image_fail(int i){if(i>=0&&i<nims)ims[i].st=2;}
 unsigned mwe_bg(void){return(unsigned)cv;}
 const char*mwe_font_name(void){return MF_NAME;}
 const char*mwe_licenses(void){

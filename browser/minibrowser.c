@@ -109,10 +109,10 @@ static const char HOME[]=
 "<li>Open a local page with file:///C:/path/to/page.html or a plain path.</li>"
 "<li>Ctrl+L focuses the address bar; Alt+Left / Alt+Right go back and forward; F5 reloads.</li></ul>"
 "<h2>Supported</h2><p class=k>HTML5 elements, CSS3 selectors, @media, var(), calc(), flexbox, grid, tables, floats, "
-"positioning, gradients, rounded corners, shadows, forms (display only), external stylesheets, a JavaScript subset, "
+"positioning, gradients, rounded corners, shadows, forms (display only), external stylesheets, a JavaScript subset, images (PNG, JPEG, GIF, BMP), "
 "Latin, Greek, Cyrillic, Chinese and Korean text in Noto Sans, HTTPS-first with a connection panel (TLS 1.3 and 1.2, "
 "verified certificates; no way to bypass an error).</p>"
-"<h2>Not yet</h2><p class=k>Images, web fonts, legacy text encodings, Traditional-only Chinese characters, and interactive forms. "
+"<h2>Not yet</h2><p class=k>Web fonts, progressive JPEG, WebP/SVG, animated GIFs (first frame only), legacy text encodings, Traditional-only Chinese characters, and interactive forms. "
 "Pages load synchronously.</p>"
 "<p><a href=\"about:blank\">about:blank</a> &middot; <a href=\"about:licenses\">about:licenses</a> (copyright notices)</p></body></html>";
 static int rdfiled(const char*url,char*dst,int cap,int*olen,int page){
@@ -280,6 +280,22 @@ static void loadcss(void){ /* external stylesheets: <link rel=stylesheet href=..
   else continue;
   mwe_add_css(csspool+used,l2);
   used+=l2+1;}}
+static unsigned char imgbuf[1<<22];
+static int loadimg(void){ /* <img src>: fetched one by one (at most 32, 4 MB each) and decoded by the engine */
+ int i,n,got=0,l2,ok;const char*h;char u[UC],full[UC];
+ for(i=0;i<mwe_image_count()&&i<32;i++){
+  if(mwe_image_state(i)!=0)continue;
+  h=mwe_image_src(i,&n);
+  if(!h||n<=0||n>=UC){mwe_image_fail(i);continue;}
+  for(l2=0;l2<n;l2++)u[l2]=h[l2];
+  u[n]=0;
+  resolve(cur,u,full,UC);
+  l2=0;ok=0;
+  if(has(full,"file:"))ok=rdfiled(full,(char*)imgbuf,(int)sizeof imgbuf,&l2,0);
+  else if(has(full,"http"))ok=httpd(full,(char*)imgbuf,(int)sizeof imgbuf,&l2,0);
+  if(ok&&l2>0&&mwe_image_set(i,imgbuf,l2))got=1;
+  else mwe_image_fail(i);}
+ return got;}
 static char jspool[1<<20];
 static void go(const char*in,int push);
 static void loadjs(void){ /* external scripts: <script src=...> (at most 16, 1 MB in total) */
@@ -340,6 +356,7 @@ static void load(char*url){
  mwe_js_time(mb_plat_time()*1000LL,mb_plat_ms());mwe_js_url(cur);
  mwe_js_run();
  sy=0;relayout();settitle();
+ for(i=0;i<2&&loadimg();i++)relayout();   /* images found by the first layout (also those added by scripts) */
  for(i=0;i<5;i++)stt[i]="Done"[i];
  pump();}
 int mb_tick(void){ /* called by the platform every ~16 ms; 1 = redraw needed */

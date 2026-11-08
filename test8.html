@@ -1,0 +1,10 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{margin:14px;font-family:sans-serif}
+:is(h1,h2){color:#a00}
+p:is(.a,.b){background:#cfe;padding:4px}
+ul :where(li.x,li.y){font-weight:bold}
+.card :is(.t,.u):not(.z){color:#036}
+</style></head><body><h1>is h1</h1><h2>is h2</h2><h3>h3 plain</h3>
+<p class="a">p.a (green)</p><p class="b">p.b (green)</p><p class="c">p.c (plain)</p>
+<ul><li class="x">li.x bold</li><li class="y">li.y bold</li><li>li plain</li></ul>
+<div class="card"><span class="t">t blue</span> <span class="u z">u.z plain</span></div></body></html>

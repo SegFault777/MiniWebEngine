@@ -7,7 +7,7 @@ A small standalone desktop web browser built on [MiniWebEngine](../README.md).
 > is a separate project that runs as an ordinary desktop application and only
 > shares the "Mini" naming. The two have different code bases and different goals.
 
-**Version 0.4** (matches MiniWebEngine 0.4); `about:licenses` shows the copyright notices
+**Version 0.7** (matches MiniWebEngine 0.7); `about:licenses` shows the copyright notices; 116 embedded Mozilla roots (`../roots/ROOTS.txt`); images (PNG, JPEG, GIF, BMP)
 
 ## Features
 

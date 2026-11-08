@@ -55,12 +55,22 @@ jobs:
           ./mwe test3.html cjk.bmp 720 && test -s cjk.bmp
           ./mwe test4.html ko.bmp 700 && test -s ko.bmp
           ./mwe test5.html css.bmp 620 && test -s css.bmp
+          ./mwe test6.html img.bmp 640 && test -s img.bmp
+          ./mwe test8.html is.bmp 520 && test -s is.bmp
 
       - name: No libc/POSIX name clashes (macOS SDK declares fls, ffs, ...)
         run: cc -std=gnu11 -fsyntax-only -Wall -Wextra tests/clash.c
 
       - name: JavaScript regression tests
         run: sh tests/js/run.sh
+
+      - name: Embedded root certificates parse and are usable
+        run: cc -std=gnu11 -O1 -Wall -Wextra tests/roots_check.c -o roots_check && ./roots_check
+
+      - name: Image decoders match Pillow
+        run: |
+          python3 -m pip install --quiet pillow
+          python3 tests/img/run.py
 
       - name: Build and test headless MiniBrowser
         run: |

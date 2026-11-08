@@ -18,6 +18,16 @@ it at run time: `mwe --licenses`, `mwe_licenses()`, and `about:licenses` in Mini
   and full-width forms; from the KR face, the KS X 1001 Hangul repertoire (2350 syllables), compatibility
   jamo and KS X 1001 symbols. Bold CJK and Hangul are synthesized by double-striking.
 
+## Mozilla CA certificate bundle (trusted root certificates)
+
+- `browser/tls/trusted_roots.h` embeds 116 TLS server root certificates taken from the Mozilla root
+  program as distributed in python-certifi 2026.10.19 (`roots/ROOTS.txt` lists each with its SHA-256;
+  `roots/SKIPPED.txt` and `roots/REMOVED.txt` list what was left out and why).
+- The bundle is derived from Mozilla's `certdata.txt`, licensed under the **Mozilla Public License 2.0**
+  (https://www.mozilla.org/MPL/2.0/). The certificates themselves are public data of their issuers.
+- Regenerate with `tools/gen_roots.py`; the file and its list must be updated whenever Mozilla changes
+  its root program, otherwise removed or distrusted roots stay trusted.
+
 ## Modification statement (OFL 1.1)
 
 The font software (both faces) was **converted and subsetted**: outlines were reduced to the listed code points,
