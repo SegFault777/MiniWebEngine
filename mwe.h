@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.8 public API (build mwe.c with -DMWE_LIB to embed it). */
+/* MiniWebEngine v0.9 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.8"
+#define MWE_VERSION "0.9"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -31,6 +31,12 @@ const char *mwe_image_src(int i, int *len);
 int  mwe_image_state(int i);
 int  mwe_image_set(int i, const unsigned char *data, int len);   /* 1 = decoded */
 void mwe_image_fail(int i);
+/* Network access for JavaScript fetch() / XMLHttpRequest. The host performs the request synchronously: it fills out[]
+ * (at most cap bytes) with the response body and returns its length, sets *status and writes the response headers
+ * ("name: value\n" lines) to rh; on failure it returns -1 and may put a message in out. */
+typedef int (*mwe_fetch_cb)(const char *method, const char *url, const char *body, int blen, const char *reqheaders,
+                            char *out, int cap, int *status, char *rh, int rhcap);
+void mwe_js_set_fetch(mwe_fetch_cb cb);
 unsigned    mwe_bg(void);
 const char *mwe_font_name(void);
 /* Copyright and licence notices of the engine and the embedded fonts (UTF-8, static string). */

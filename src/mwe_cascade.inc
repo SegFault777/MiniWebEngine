@@ -159,13 +159,14 @@ static void stl(N*n,St*pa){
   s=c->s;base=nvar;
   defst(s,pa);
   styleone(c,s,pa);
+  ctrapply(s);
   gens(c,s);
   stl(c,s);
   nvar=base;}}
 static St rootst;
 static void restyle(void){
  sortrules();
- cpp=0;nvar=0;rootfs=16;
+ cpp=0;nvar=0;rootfs=16;nctr=0;
  defst(&rootst,0);rootst.disp=D_BLOCK;
  root->s=&rootst;
  stl(root,&rootst);}

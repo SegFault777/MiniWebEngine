@@ -36,9 +36,43 @@ static int imreg(S src){
  ims[nims].src=src;ims[nims].px=0;ims[nims].w=ims[nims].h=0;ims[nims].st=0;i=nims++;
  if(src.n>5&&lc(src.p[0])=='d'&&lc(src.p[1])=='a'&&lc(src.p[2])=='t'&&lc(src.p[3])=='a'&&src.p[4]==':'){if(!imdata(i))ims[i].st=2;}
  return i;}
+/* ---- <picture> / srcset / sizes: choose the source for an <img> ---- */
+static S srcsetpick(S ss,int need){   /* candidates "url [Nw|Nx]", comma separated; widths: smallest >= need, else the largest; densities: 1x */
+ S best={0,0};int i=0,bw=-1,bx=1<<30,wmode=0,bmax=-1;S bmaxu={0,0};
+ while(i<ss.n){
+  S u;int ds=0,dd=0,isw=0,v=0,a;
+  while(i<ss.n&&(isws(ss.p[i])||ss.p[i]==','))i++;
+  a=i;while(i<ss.n&&!isws(ss.p[i]))i++;
+  u=(S){ss.p+a,i-a};
+  if(u.n&&u.p[u.n-1]==','){u.n--;}
+  else{
+   while(i<ss.n&&isws(ss.p[i]))i++;
+   a=i;while(i<ss.n&&ss.p[i]!=',')i++;
+   {int q;for(q=a;q<i;q++){char c=ss.p[q];if(c>='0'&&c<='9'){if(!dd)v=v*10+(c-'0');else ds=ds*10+(c-'0');}else if(c=='.')dd=1;else if(c=='w'){isw=1;}else if(c=='x'){}}}}
+  if(!u.n)continue;
+  if(isw){wmode=1;if(v>=need&&(bw<0||v<bw)){bw=v;best=u;}if(v>bmax){bmax=v;bmaxu=u;}}
+  else{int x=v>0?v*10:10;if(!wmode&&(x>=10&&x<bx)){bx=x;best=u;}if(!best.n)best=u;}}
+ if(wmode&&!best.n)best=bmaxu;
+ return best;}
+static int imtype_ok(S ty){return !ty.n||starts(ty,"image/png")||starts(ty,"image/jpeg")||starts(ty,"image/jpg")||starts(ty,"image/gif")||starts(ty,"image/bmp");}
+static S imsrcof(N*n){
+ S src=getattr(n,"src"),ss=getattr(n,"srcset"),wa=getattr(n,"width");N*p=n->par,*c;int need=0,i;
+ for(i=0;i<wa.n&&wa.p[i]>='0'&&wa.p[i]<='9';i++)need=need*10+(wa.p[i]-'0');
+ if(!need)need=VW<1200?VW:1200;
+ if(p&&p->tag.n==7&&seq(p->tag,"picture")){
+  for(c=p->kid;c&&c!=n;c=c->nx){
+   S ty,md,sset;
+   if(!c->tag.n||!seq(c->tag,"source"))continue;
+   ty=getattr(c,"type");md=getattr(c,"media");sset=getattr(c,"srcset");
+   if(!imtype_ok(ty))continue;
+   if(md.n){int b[4];b[0]=0;b[1]=1<<30;b[2]=0;b[3]=1<<30;if(!mq1(md,b)||VW<b[0]||VW>b[1])continue;}
+   if(sset.n){S u=srcsetpick(sset,need);if(u.n)return u;}}}
+ if(ss.n){S u=srcsetpick(ss,need);if(u.n)return u;}
+ return src;}
 static int imfor(N*n){   /* index of the decoded image for an <img>, registering it on first sight; -1 if none (yet) */
- S src=getattr(n,"src");int i;
+ S src=imsrcof(n);int i;
  if(!src.p||src.n<=0)return -1;
  i=imreg(src);
  return i>=0&&ims[i].st==1?i:-1;}
-static void imscan(N*n){N*c;if(n->tag.n==3&&seq(n->tag,"img")){S src=getattr(n,"src");if(src.p&&src.n>0)imreg(src);}for(c=n->kid;c;c=c->nx)imscan(c);}
+static int imfind(S u){int i=imreg(u);return i>=0&&ims[i].st==1?i:-1;}   /* decoded image for a CSS url() */
+static void imscan(N*n){N*c;if(n->tag.n==3&&seq(n->tag,"img")){S src=imsrcof(n);if(src.p&&src.n>0)imreg(src);}for(c=n->kid;c;c=c->nx)imscan(c);}

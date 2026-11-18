@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.8
+/* MiniWebEngine v0.9
  * Zero-dependency mini HTML5 + CSS3 engine: HTML parse -> selectors/cascade (@media, var(),
  * calc()) -> block / inline / flex / grid / table layout -> anti-aliased vector-font
  * rasterizer (outlines embedded as compact data, see tools/genfont.py) -> pixels.

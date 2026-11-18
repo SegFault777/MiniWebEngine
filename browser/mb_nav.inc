@@ -83,6 +83,24 @@ static void pump(void){ /* console output, alert() and location changes requeste
   int i;for(i=0;i<n;i++)u[i]=t[i];u[n]=0;
   resolve(cur,u,full,UC);
   navdepth++;go(full,1);navdepth--;}}
+/* fetch() / XMLHttpRequest from scripts: synchronous, same rules as page subresources (HSTS, mixed content blocked,
+ * certificates always verified). file: URLs are readable only from file: pages. CORS is not enforced. */
+static int jsfetch(const char*method,const char*url,const char*body,int blen,const char*hdrs,char*out,int cap,int*status,char*rh,int rhcap){
+ char u[UC],full[UC];int l=0,ok,i;
+ for(i=0;url[i]&&i<UC-1;i++)u[i]=url[i];
+ u[i]=0;
+ resolve(cur,u,full,UC);
+ *status=0;rh[0]=0;
+ if(has(full,"file:")){
+  if(!has(cur,"file:")){cpy(out,cap,"file: URLs can only be read from file: pages");return -1;}
+  if(!rdfiled(full,out,cap,&l,0)){cpy(out,cap,"file not found");return -1;}
+  *status=200;return l;}
+ if(!has(full,"http")){cpy(out,cap,"unsupported URL scheme");return -1;}
+ rqm=method;rqb=body;rqbl=blen;rqh=hdrs;
+ ok=httpd(full,out,cap,&l,0);
+ rqm="GET";rqb=0;rqbl=0;rqh=0;
+ if(!ok){cpy(out,cap,"network error, or blocked as mixed content");return -1;}
+ *status=lastst;cpy(rh,rhcap,lastrh);return l;}
 static void load(char*url){
  int i;
  nloads++;
@@ -160,6 +178,7 @@ static void hgo(int d){
  load(hist[hi]);
  sy=hsy[hi];relayout();}
 void mb_init(const char*start,int w,int h){
+ mwe_js_set_fetch(jsfetch);
  Wd=w;Ht=h;sy=0;hn=hi=0;uf=0;
  ufirst=1;go(start&&start[0]?start:"about:home",1);ufirst=0;}
 void mb_resize(int w,int h){Wd=w;Ht=h;if(ready)relayout();}

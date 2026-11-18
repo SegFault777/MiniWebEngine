@@ -1,5 +1,5 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.8)
+ * MiniWebEngine JavaScript subset (v0.9)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */
@@ -16,7 +16,7 @@ enum{JT_U,JT_NUL,JT_B,JT_N,JT_S,JT_O};
 struct JStr{int len,asc;char d[1];};
 typedef struct{JStr*k;JV v;int fl;}JPr;
 typedef JV(*JNF)(JV,JV*,int);
-enum{OK_PLAIN,OK_ARR,OK_FN,OK_NAT,OK_ENV,OK_NODE,OK_STYLE,OK_CLS,OK_DATE,OK_ERR,OK_BOUND,OK_DOC};
+enum{OK_PLAIN,OK_ARR,OK_FN,OK_NAT,OK_ENV,OK_NODE,OK_STYLE,OK_CLS,OK_DATE,OK_ERR,OK_BOUND,OK_DOC,OK_PROXY};
 struct JOb{unsigned char k,fl;short pad;int np,cp,na,ca;JOb*proto;JPr*pr;JV*it;JNd*fn;JOb*env;JV ex;N*dn;JNF nf;};
 typedef struct{unsigned sz;unsigned char ty,mk,x1,x2;}JHd;
 enum{BT_FREE,BT_STR,BT_OBJ,BT_PRS,BT_VALS};
@@ -301,6 +301,7 @@ static JPr*jfind(JOb*o,JStr*k){int i;for(i=0;i<o->np;i++)if(jkeq(o->pr[i].k,k))r
 static JPr*jaddpr(JOb*o,JStr*k,JV v,int fl){
  JPr*n;int i,nc;
  if(o==&jdmyo)return 0;
+ if(k->len>1&&(k->d[0]==1||k->d[0]=='#'))fl|=1;   /* symbols and #private names are not enumerable */
  if(o->np>=o->cp){
   nc=o->cp?o->cp*2:4;
   n=jalloc(nc*(int)sizeof(JPr),BT_PRS);if(!n)return 0;
@@ -339,6 +340,7 @@ static JOb*jwrap[JMAXWRAP];static int jnw;
 static JV jstorev[2];
 static JV jexv,jrv;
 static JOb*jroot2[8];
+static JOb*jmicroq,*junh,*jPromProto,*jGenProto,*jgencur;
 
 /* ---- garbage collector: precise heap marking + conservative scan of the C stack ---- */
 #define JSTK 65536
@@ -394,6 +396,7 @@ static void jgc(void){
  jmarkp(jErrProto);jmarkp(jDateProto);jmarkp(jNodeProto);jmarkp(jClsProto);jmarkp(jStyleProto);jmarkp(jDocProto);
  jmarkp(jErrT);jmarkp(jErrR);jmarkp(jErrS);jmarkp(jErrF);
  for(i=0;i<8;i++)jmarkp(jroot2[i]);
+ jmarkp(jmicroq);jmarkp(junh);jmarkp(jPromProto);jmarkp(jGenProto);jmarkp(jgencur);
  for(i=0;i<jnlst;i++){jmarkp(jlst[i].type);jmarkv(jlst[i].fn);}
  for(i=0;i<jnt;i++){int k;jmarkv(jtm[i].fn);for(k=0;k<3;k++)jmarkv(jtm[i].a[k]);}
  for(i=0;i<jnw;i++)jmarkp(jwrap[i]);
@@ -431,13 +434,15 @@ static void jgc(void){
 enum{ND_NUM=1,ND_STR,ND_TPL,ND_ID,ND_THIS,ND_NULL,ND_TRUE,ND_FALSE,ND_ARR,ND_OBJ,ND_FUNC,ND_CLASS,ND_UN,ND_BIN,ND_LOG,ND_ASG,ND_UPD,ND_COND,
  ND_CALL,ND_NEW,ND_MEM,ND_IDX,ND_SPREAD,ND_SEQ,ND_TYPEOF,ND_DEL,ND_VOID,ND_HOLE,ND_OPT,ND_SUPER,ND_PROP,ND_PARM,ND_PATA,ND_PATO,
  ND_VAR,ND_DECL,ND_EXPR,ND_BLOCK,ND_IF,ND_FOR,ND_FORIN,ND_FOROF,ND_WHILE,ND_DO,ND_RET,ND_BRK,ND_CONT,ND_THROW,ND_TRY,ND_SWITCH,ND_CASE,
- ND_EMPTY,ND_FUNCD,ND_CLASSD,ND_LABEL,ND_VARN,ND_MEMBER,ND_REGEX};
+ ND_EMPTY,ND_FUNCD,ND_CLASSD,ND_LABEL,ND_VARN,ND_MEMBER,ND_REGEX,ND_AWAIT,ND_YIELD,ND_TAG};
 enum{B_ADD=1,B_SUB,B_MUL,B_DIV,B_MOD,B_EXP,B_SHL,B_SHR,B_USHR,B_AND,B_OR,B_XOR,B_EQ,B_NE,B_SEQ,B_SNE,B_LT,B_GT,B_LE,B_GE,B_IN,B_INSTOF,
  L_AND=40,L_OR,L_NUL};
 #define JF_ARROW 1
 #define JF_EXPR 2
 #define JF_ARGS 4
 #define JF_LEX 8
+#define JF_ASYNC 16
+#define JF_GEN 32
 #define JF_PREFIX 1
 #define JF_OPT 1
 #define JF_COMP 2
@@ -542,8 +547,8 @@ static void jnext(void){
   break;}
  if(jpos>=jend){jtk=TK_EOF;return;}
  c=(unsigned char)jsrc[jpos];
- if(jidst(c)){
-  i=jpos;while(jpos<jend&&jidch((unsigned char)jsrc[jpos]))jpos++;
+ if(jidst(c)||(c=='#'&&jpos+1<jend&&jidst((unsigned char)jsrc[jpos+1]))){   /* identifiers, and #private names (kept with the '#') */
+  i=jpos;if(c=='#')jpos++;while(jpos<jend&&jidch((unsigned char)jsrc[jpos]))jpos++;
   jtstr=jintern(jsrc+i,jpos-i);jtk=TK_ID;return;}
  if(isdg(c)||(c=='.'&&jpos+1<jend&&isdg(jsrc[jpos+1]))){
   double r=0;
@@ -593,6 +598,8 @@ static void jsemi(void){
 static JNd*jn2(int t,JNd*a,JNd*b){JNd*n=jnd(t);n->a=a;n->b=b;n->line=jline;return n;}
 static JNd*jpexpr(void);static JNd*jpassign(void);static JNd*jpstmt(void);static JNd*jpunary(void);static JNd*jpprimary(void);
 static JNd*jpblock(void);static JNd*jpfunc(int arrow,JNd*pre);static JNd*jpclass(int decl);
+#define JSAVE int s_pos=jpos,s_end=jend,s_line=jline,s_tk=jtk,s_nlb=jnlb,s_ts=jtstart,s_te=jtend,s_q,s_fail=jpfail;JStr*s_str=jtstr;double s_num=jtnum;char s_tp[8];for(s_q=0;s_q<8;s_q++)s_tp[s_q]=jtp[s_q];
+#define JREST jpos=s_pos;jend=s_end;jline=s_line;jtk=s_tk;jnlb=s_nlb;jtstr=s_str;jtnum=s_num;jtstart=s_ts;jtend=s_te;for(s_q=0;s_q<8;s_q++)jtp[s_q]=s_tp[s_q];jpfail=s_fail;
 static int jisres(JStr*s){
  static const char*R[]={"break","case","catch","class","const","continue","default","delete","do","else","finally","for","function","if","in","instanceof","let","new","return","switch","this","throw","try","typeof","var","void","while","null","true","false","super",0};
  int i;for(i=0;R[i];i++)if(jkeqc(s,R[i]))return 1;return 0;}
@@ -678,6 +685,16 @@ static int jarrowahead(void){ /* at '(' : is it an arrow function head? */
  jpos=sp;jend=se;jline=sl;jtk=stk;jnlb=snl;jtstr=ss;jtnum=sn;jtstart=ts;jtend=te;for(q=0;q<8;q++)jtp[q]=sp2[q];
  jpfail=sf;
  return r;}
+/* method modifiers: [async] [*]; returns JF_ASYNC/JF_GEN. 'async' followed by , : ( } = ; is just a name. */
+static int jpmods(void){
+ int fl=0;
+ if(jtk==TK_ID&&jkeqc(jtstr,"async")){
+  JSAVE
+  jnext();
+  if(jnlb||jis(",")||jis(":")||jis("(")||jis("}")||jis("=")||jis(";")){JREST}
+  else fl|=JF_ASYNC;}
+ if(jis("*")){jnext();fl|=JF_GEN;}
+ return fl;}
 static JNd*jpparams(void){ /* after '(' consumed */
  JNd*h=0,*t=0,*p;
  while(!jis(")")&&jtk!=TK_EOF){
@@ -688,10 +705,12 @@ static JNd*jpparams(void){ /* after '(' consumed */
   if(t)t->nx=p;else h=p;t=p;
   if(!jeat(","))break;}
  jexpect(")");return h;}
+static int jasyncnext;   /* the next jpfunc() call parses an async function */
 static JNd*jpfunc(int arrow,JNd*pre){
  JNd*f=jnd(ND_FUNC),*sv=jfnc,*p;
- f->line=jline;f->fl=(unsigned char)(arrow?JF_ARROW:0);
+ f->line=jline;f->fl=(unsigned char)((arrow?JF_ARROW:0)|(jasyncnext?JF_ASYNC:0));jasyncnext=0;
  if(!arrow){
+  if(jis("*")){f->fl|=JF_GEN;jnext();}
   if(jtk==TK_ID&&!jis("(")){f->s=jtstr;jnext();}
   jexpect("(");f->a=jpparams();}
  else{
@@ -718,14 +737,18 @@ static JNd*jpclass(int decl){
    c->a=e;}}
  jexpect("{");
  while(!jis("}")&&jtk!=TK_EOF){
-  int st=0;
+  int st=0,mfl=0;
   if(jeat(";"))continue;
   m=jnd(ND_PROP);m->line=jline;
   if(jkw("static")){jnext();if(jis("(")||jis("=")){nm=jintc("static");m->s=nm;}else st=1;}
   if(st)m->fl|=JF_STATIC;
+  if(st&&jis("{")){   /* static initialization block: run once with this = the class */
+   JNd*f=jnd(ND_FUNC),*sv=jfnc;f->line=jline;jfnc=f;f->b=jpblock();jfnc=sv;m->b=f;m->op=3;
+   if(t)t->nx=m;else h=m;t=m;continue;}
+  mfl=m->s?0:jpmods();
   if(!m->s){
    JStr*first=0;
-   if(jtk==TK_ID&&(jkeqc(jtstr,"get")||jkeqc(jtstr,"set"))){first=jtstr;jnext();
+   if(!mfl&&jtk==TK_ID&&(jkeqc(jtstr,"get")||jkeqc(jtstr,"set"))){first=jtstr;jnext();
     if(jis("(")||jis("=")||jis(";")||jis("}")){m->s=first;first=0;}
     else m->x=(unsigned char)(jkeqc(first,"get")?1:2);}
    if(!m->s){
@@ -734,7 +757,7 @@ static JNd*jpclass(int decl){
     else if(jtk==TK_NUM){char b[40];int n=jd2s(jtnum,b);m->s=jintern(b,n);jnext();}
     else{jperr("bad class member");break;}}}
   if(jis("(")){
-   JNd*f=jnd(ND_FUNC),*sv=jfnc;f->line=jline;jnext();f->a=jpparams();jfnc=f;f->b=jpblock();jfnc=sv;
+   JNd*f=jnd(ND_FUNC),*sv=jfnc;f->line=jline;f->fl=(unsigned char)mfl;jnext();f->a=jpparams();jfnc=f;f->b=jpblock();jfnc=sv;
    m->b=f;m->op=1;}
   else{
    if(jeat("=")){JNd*f=jnd(ND_FUNC),*sv=jfnc;f->fl=JF_ARROW|JF_EXPR;jfnc=f;f->b=jpassign();jfnc=sv;m->b=f;}
@@ -756,6 +779,16 @@ static JNd*jpprimary(void){
   if(jkw("true")){n=jnd(ND_TRUE);jnext();return n;}
   if(jkw("false")){n=jnd(ND_FALSE);jnext();return n;}
   if(jisres(jtstr)){jperr("unexpected keyword");return jnd(ND_NULL);}
+  if(jkeqc(jtstr,"async")){
+   JSAVE
+   jnext();
+   if(!jnlb&&jkw("function")){jnext();jasyncnext=1;return jpfunc(0,0);}
+   if(!jnlb&&jtk==TK_ID&&!jisres(jtstr)){
+    JStr*pn=jtstr;
+    jnext();
+    if(jis("=>")){JNd*p=jnd(ND_PARM);p->a=jnd(ND_ID);p->a->s=pn;p->a->line=jline;jasyncnext=1;return jpfunc(1,p);}}
+   else if(!jnlb&&jis("(")&&jarrowahead()){jnext();{JNd*pr=jpparams();jasyncnext=1;return jpfunc(1,pr);}}
+   JREST}
   n=jnd(ND_ID);n->s=jtstr;n->line=jline;
   if(jkeqc(jtstr,"arguments")&&jfnc)jfnc->fl|=JF_ARGS;
   jnext();
@@ -777,13 +810,14 @@ static JNd*jpprimary(void){
    if(t)t->nx=e;else h=e;t=e;}
   jexpect("]");n->a=h;return n;}
  if(jis("{")){
-  JNd*h=0,*t=0,*p;
+  JNd*h=0,*t=0,*p;int mfl;
   n=jnd(ND_OBJ);n->line=jline;jnext();
   while(!jis("}")&&jtk!=TK_EOF){
    if(jeat("...")){p=jn2(ND_SPREAD,jpassign(),0);}
    else{
     p=jnd(ND_PROP);p->line=jline;
-    if(jtk==TK_ID&&(jkeqc(jtstr,"get")||jkeqc(jtstr,"set"))){
+    mfl=jpmods();
+    if(!mfl&&jtk==TK_ID&&(jkeqc(jtstr,"get")||jkeqc(jtstr,"set"))){
      JStr*first=jtstr;int sp=jpos,sl=jline,stk=jtk,snl=jnlb;
      jnext();
      if(jis(",")||jis(":")||jis("(")||jis("}")||jis("=")){p->s=first;}
@@ -794,8 +828,9 @@ static JNd*jpprimary(void){
      else if(jtk==TK_NUM){char b[40];int k=jd2s(jtnum,b);p->s=jintern(b,k);jnext();}
      else{jperr("bad object key");break;}}
     if(jis("(")){
-     JNd*f=jnd(ND_FUNC),*sv=jfnc;f->line=jline;jnext();f->a=jpparams();jfnc=f;f->b=jpblock();jfnc=sv;p->b=f;}
+     JNd*f=jnd(ND_FUNC),*sv=jfnc;f->line=jline;f->fl=(unsigned char)mfl;jnext();f->a=jpparams();jfnc=f;f->b=jpblock();jfnc=sv;p->b=f;}
     else if(jeat(":"))p->b=jpassign();
+    else if(!p->s||mfl){jperr("bad object literal");break;}   /* a shorthand needs a plain identifier name */
     else{
      JNd*id=jnd(ND_ID);id->s=p->s;id->line=jline;
      if(jkeqc(p->s,"arguments")&&jfnc)jfnc->fl|=JF_ARGS;
@@ -859,6 +894,17 @@ static JNd*jpmember(void){
    c=e;}
   else if(jis("[")){jnext();e=jn2(ND_IDX,c,jpexpr());e->line=jline;jexpect("]");c=e;}
   else if(jis("(")){jnext();e=jn2(ND_CALL,c,jpargs());e->line=jline;c=e;}
+  else if(jtk==TK_TPL){   /* tag`a${x}b` -> tag(["a","b"], x): the first argument is a strings array with .raw (= cooked) */
+   JNd*tp=jptpl(),*ar,*q,*sh=0,*st=0,*xh=0,*xt=0;
+   jnext();
+   ar=jnd(ND_ARR);ar->x=2;ar->line=jline;
+   for(q=tp->a;q;q=q->nx){
+    JNd*cp=jnd(q->t);
+    *cp=*q;cp->nx=0;
+    if(q->t==ND_STR&&!(q->x&1)){if(st)st->nx=cp;else sh=cp;st=cp;}
+    else{if(xt)xt->nx=cp;else xh=cp;xt=cp;}}
+   ar->a=sh;ar->nx=xh;
+   e=jn2(ND_CALL,c,ar);e->line=jline;c=e;}
   else break;}
  if(chain){e=jn2(ND_OPT,c,0);return e;}
  return c;}
@@ -875,7 +921,8 @@ static JNd*jpunary(void){
  if(jtk==TK_ID){
   if(jkw("typeof")){jnext();return jn2(ND_TYPEOF,jpunary(),0);}
   if(jkw("void")){jnext();return jn2(ND_VOID,jpunary(),0);}
-  if(jkw("delete")){jnext();return jn2(ND_DEL,jpunary(),0);}}
+  if(jkw("delete")){jnext();return jn2(ND_DEL,jpunary(),0);}
+  if(jkw("await")&&(!jfnc||(jfnc->fl&JF_ASYNC))){jnext();n=jn2(ND_AWAIT,jpunary(),0);n->line=jline;return n;}}
  n=jppostfix();
  if(jis("**")){jnext();{JNd*r=jn2(ND_BIN,n,jpunary());r->op=B_EXP;r->line=jline;return r;}}
  return n;}
@@ -909,6 +956,11 @@ static JNd*jpcond(void){
   jexpect(":");n->c=jpassign();return n;}
  return c;}
 static JNd*jpassign(void){
+ if(jtk==TK_ID&&jfnc&&(jfnc->fl&JF_GEN)&&jkw("yield")){   /* yield [*] [expr] */
+  JNd*y=jnd(ND_YIELD);y->line=jline;jnext();
+  if(jeat("*"))y->x=1;
+  if(!jnlb&&!jis(")")&&!jis("]")&&!jis("}")&&!jis(",")&&!jis(";")&&!jis(":")&&jtk!=TK_EOF)y->a=jpassign();
+  return y;}
  static const struct{const char*s;int op;}A[]={{"=",0},{"+=",B_ADD},{"-=",B_SUB},{"*=",B_MUL},{"/=",B_DIV},{"%=",B_MOD},{"**=",B_EXP},{"<<=",B_SHL},{">>=",B_SHR},{">>>=",B_USHR},
   {"&=",B_AND},{"|=",B_OR},{"^=",B_XOR},{"&&=",L_AND},{"||=",L_OR},{"\?\?=",L_NUL},{0,0}};
  JNd*l=jpcond(),*n;int i;
@@ -950,6 +1002,11 @@ static JNd*jpstmt(void){
    int k=jkw("var")?0:jkw("let")?1:2;jnext();s=jpvar(k);jsemi();return s;}
   if(jkw("function")){
    jnext();s=jnd(ND_FUNCD);s->line=jline;s->a=jpfunc(0,0);s->s=s->a->s;return s;}
+  if(jkeqc(jtstr,"async")){   /* async function declaration */
+   JSAVE
+   jnext();
+   if(!jnlb&&jkw("function")){jnext();s=jnd(ND_FUNCD);s->line=jline;jasyncnext=1;s->a=jpfunc(0,0);s->s=s->a->s;return s;}
+   JREST}
   if(jkw("class")){jnext();s=jnd(ND_CLASSD);s->a=jpclass(1);s->s=s->a->s;return s;}
   if(jkw("if")){
    s=jnd(ND_IF);s->line=jline;jnext();jexpect("(");s->a=jpexpr();jexpect(")");s->b=jpstmt();
@@ -962,7 +1019,9 @@ static JNd*jpstmt(void){
    jexpect("(");s->a=jpexpr();jexpect(")");if(jis(";"))jnext();return s;}
   if(jkw("for")){
    JNd*init=0;int isv=0,kind=0;
-   s=jnd(ND_FOR);s->line=jline;jnext();jexpect("(");
+   s=jnd(ND_FOR);s->line=jline;jnext();
+   if(jkw("await")){s->fl|=2;jnext();}   /* for await (x of y): every element is awaited */
+   jexpect("(");
    if(jis(";")){}
    else{
     jnoin=1;
@@ -1042,6 +1101,8 @@ static JNd*jparse(const char*src,int n){
 /* ---- interpreter state ---- */
 static int jthrow,jabort,jshort,jdepth,jline_cur;static j64 jsteps;static JStr*jlabel;
 static int jnewcall;
+static JOb*jcurnat;                       /* the native function object being called (closure data for natives) */
+static JV jawait(JV v);static JV jyieldeval(JNd*n,JOb*env);static JOb*jiterfrom(JV v);static void jmicrorun(void);static int jissym(JV v);
 static JV jmkregex(JStr*pat,JStr*flags);
 static int jdomget(JOb*o,JStr*k,JV*out);
 static int jdomset(JOb*o,JStr*k,JV v);
@@ -1049,6 +1110,7 @@ static JV jcall(JV f,JV thisv,JV*args,int argc);
 static JV jconstruct(JV f,JV*args,int argc);
 static JV jget(JV base,JStr*key);
 static void jput(JV base,JStr*key,JV v);
+static JV jproxysnap(JV v);static JV jproxyget(JOb*px,JStr*key);static void jproxyset(JOb*px,JStr*key,JV v);static int jproxyhas(JOb*px,JStr*key);static int jproxydel(JOb*px,JStr*key);static void jproxykeys(JOb*px,JOb*out);
 static JStr*jtos(JV v);
 static JStr*K_length,*K_prototype,*K_constructor,*K_message,*K_name,*K_toString,*K_this,*K_cls,*K_args,*K_valueOf,*K_proto,*K_stack;
 #define JARG(i) ((i)<argc?args[i]:jundef())
@@ -1072,12 +1134,15 @@ static int jtruthy(JV v){
   default:return 1;}}
 static int jiscallable(JV v){return v.t==JT_O&&(v.u.o->k==OK_FN||v.u.o->k==OK_NAT||v.u.o->k==OK_BOUND);}
 static JStr*jtypeof(JV v){
- switch(v.t){case JT_U:return jcstr("undefined");case JT_NUL:return jcstr("object");case JT_B:return jcstr("boolean");case JT_N:return jcstr("number");case JT_S:return jcstr("string");}
+ switch(v.t){case JT_U:return jcstr("undefined");case JT_NUL:return jcstr("object");case JT_B:return jcstr("boolean");case JT_N:return jcstr("number");case JT_S:return jcstr(jissym(v)?"symbol":"string");}
  return jcstr(jiscallable(v)?"function":"object");}
+static const char*jphint="default";
 static JV jtoprim(JV v){
  JV f,r;
  if(v.t!=JT_O)return v;
  if(v.u.o->k==OK_DATE)return v.u.o->ex;
+ f=jget(v,jintc("\1@toPrimitive"));
+ if(jiscallable(f)){JV hint=jcv(jphint);r=jcall(f,v,&hint,1);if(jthrow)return jundef();if(r.t!=JT_O)return r;}
  f=jget(v,K_valueOf);
  if(jiscallable(f)){r=jcall(f,v,0,0);if(jthrow)return jundef();if(r.t!=JT_O)return r;}
  f=jget(v,K_toString);
@@ -1091,7 +1156,7 @@ static double jtonum(JV v){
   case JT_B:return v.u.b;
   case JT_N:return v.u.d;
   case JT_S:return jstod(v.u.s->d,v.u.s->len,&ok);
-  default:v=jtoprim(v);if(jthrow)return 0;if(v.t==JT_O)return jNAN();return jtonum(v);}}
+  default:jphint="number";v=jtoprim(v);jphint="default";if(jthrow)return 0;if(v.t==JT_O)return jNAN();return jtonum(v);}}
 static JStr*jtos(JV v){
  switch(v.t){
   case JT_U:return jcstr("undefined");
@@ -1100,7 +1165,9 @@ static JStr*jtos(JV v){
   case JT_N:return jnum2s(v.u.d);
   case JT_S:return v.u.s;
   default:{
-   JV f=jget(v,K_toString),r;
+   JV f=jget(v,jintc("\1@toPrimitive")),r;
+   if(jiscallable(f)){JV h=jcv("string");r=jcall(f,v,&h,1);if(jthrow)return&jemptys;if(r.t!=JT_O)return jtos(r);}
+   f=jget(v,K_toString);
    if(jiscallable(f)){
     if(jdepth>JMAXDEPTH-8){jthrowerr(jErrR,"Maximum call stack size exceeded");return&jemptys;}
     r=jcall(f,v,0,0);if(jthrow)return&jemptys;
@@ -1160,6 +1227,7 @@ static JV jgetown(JOb*o,JStr*key,int*found){
  *found=0;return jundef();}
 static JV jget(JV base,JStr*key){
  JOb*o,*p;int found,i;
+ if(base.t==JT_O&&base.u.o->k==OK_PROXY)return jproxyget(base.u.o,key);
  switch(base.t){
   case JT_U:case JT_NUL:return jthrowerr2(jErrT,"Cannot read properties of ",jcstr(base.t==JT_U?"undefined":"null")," (reading '"),jthrow?jundef():jundef();
   case JT_S:
@@ -1198,6 +1266,7 @@ static void jput(JV base,JStr*key,JV v){
   if(base.t==JT_U||base.t==JT_NUL)jthrowerr2(jErrT,"Cannot set properties of ",jcstr(base.t==JT_U?"undefined":"null")," (setting '");
   return;}
  o=base.u.o;
+ if(o->k==OK_PROXY){jproxyset(o,key,v);return;}
  if(o->k==OK_ARR){
   if(jkeq(key,K_length)){
    double d=jtonum(v);int n=(int)d;
@@ -1221,6 +1290,7 @@ static int jhasprop(JV base,JStr*key){
  JOb*p;int found,i;
  if(base.t==JT_S){i=jidx(key);return jkeq(key,K_length)||(i>=0&&i<jcplen(base.u.s));}
  if(base.t!=JT_O)return 0;
+ if(base.u.o->k==OK_PROXY)return jproxyhas(base.u.o,key);
  for(p=base.u.o;p;p=p->proto){jgetown(p,key,&found);if(found)return 1;}
  return 0;}
 
@@ -1238,7 +1308,18 @@ static int jbindpat(JNd*p,JV v,JOb*env,int kind);
 static JV jevclass(JNd*c,JOb*env);
 static void jclassfields(JOb*cls,JV self);
 static JV jinitparent(JOb*par,JV self,JV*args,int argc);
-static JV jcallfn(JOb*fo,JV thisv,JV*args,int argc,int isnew){
+static JV jmkgen(JOb*fo,JV thisv,JV*args,int argc);static JOb*jpnew(void);static void jpsettle(JOb*p,int st,JV v);static JV jpresolve(JOb*p,JV x);
+static JV jcallfn0(JOb*fo,JV thisv,JV*args,int argc,int isnew);
+static JV jcallfn(JOb*fo,JV thisv,JV*args,int argc,int isnew){   /* async functions return a promise, generator functions a generator object */
+ JNd*f=fo->fn;
+ if(!isnew&&f&&f->t==ND_FUNC&&(f->fl&(JF_ASYNC|JF_GEN))){
+  if(f->fl&JF_GEN)return jmkgen(fo,thisv,args,argc);
+  {JV r=jcallfn0(fo,thisv,args,argc,0);JOb*p=jpnew();
+   if(jabort)return jundef();
+   if(jthrow){JV e=jexv;jthrow=0;jpsettle(p,2,e);}else jpresolve(p,r);
+   return jobj(p);}}
+ return jcallfn0(fo,thisv,args,argc,isnew);}
+static JV jcallfn0(JOb*fo,JV thisv,JV*args,int argc,int isnew){
  JNd*f=fo->fn,*p;JOb*env;int i=0;JV v;
  if(f->t==ND_CLASS){
   if(!isnew)return jthrowerr(jErrT,"Class constructor cannot be invoked without 'new'");
@@ -1276,7 +1357,7 @@ static JV jcall(JV fv,JV thisv,JV*args,int argc){
  if(o->k==OK_NAT){
   JV r;
   if(jdepth>=JMAXDEPTH)return jthrowerr(jErrR,"Maximum call stack size exceeded");
-  jdepth++;r=o->nf(thisv,args,argc);jdepth--;
+  jdepth++;jcurnat=o;r=o->nf(thisv,args,argc);jdepth--;
   return jthrow?jundef():r;}
  if(o->k==OK_BOUND){
   JV na[24];int i,n=0;
@@ -1295,7 +1376,7 @@ static JV jconstruct(JV fv,JV*args,int argc){
  th=jobj(self);
  if(o->k==OK_NAT){
   if(jdepth>=JMAXDEPTH)return jthrowerr(jErrR,"Maximum call stack size exceeded");
-  jnewcall=1;jdepth++;r=o->nf(th,args,argc);jdepth--;jnewcall=0;
+  jnewcall=1;jdepth++;jcurnat=o;r=o->nf(th,args,argc);jdepth--;jnewcall=0;
   if(jthrow)return jundef();
   return r.t==JT_O?r:th;}
  if(o->fn&&o->fn->t==ND_CLASS){
@@ -1322,7 +1403,7 @@ static JV jinitparent(JOb*par,JV self,JV*args,int argc){
   if(ctor){JOb*cf=jmkfn(ctor,par->env);cf->fl|=2;return jcallfn(cf,self,args,argc,1);}
   if(pp){jinitparent(pp,self,args,argc);if(jthrow)return jundef();jclassfields(par,self);}
   return jundef();}
- if(par->k==OK_NAT){JV r;jnewcall=1;r=par->nf(self,args,argc);jnewcall=0;return r;}
+ if(par->k==OK_NAT){JV r;jnewcall=1;jcurnat=par;r=par->nf(self,args,argc);jnewcall=0;return r;}
  return jcall(jobj(par),self,args,argc);}
 static void jclassfields(JOb*cls,JV self){
  JNd*m;JOb*fe;JV v;
@@ -1342,7 +1423,7 @@ static JOb*jiterable(JV v){
  if(v.t==JT_S){r=jnewarr(8);for(i=0;i<jcplen(v.u.s);i++)jarrpush(r,jstrat(v.u.s,i));return r;}
  if(v.t==JT_O&&(v.u.o->fl&4)){JOb*m=v.u.o;r=jnewarr(8);for(i=0;i<m->na;i+=2){JOb*p=jnewarr(2);jarrpush(p,m->it[i]);jarrpush(p,m->it[i+1]);jarrpush(r,jobj(p));}return r;}
  if(v.t==JT_O&&(v.u.o->fl&8)){JOb*m=v.u.o;r=jnewarr(8);for(i=0;i<m->na;i++)jarrpush(r,m->it[i]);return r;}
- return 0;}
+ return jiterfrom(v);}
 
 /* ---- evaluator ---- */
 static double jpow(double x,double y);
@@ -1429,6 +1510,7 @@ static void jkeysof(JV v,JOb*out){
  JOb*o;int i,k;JPr*p;
  if(v.t==JT_S){for(i=0;i<jcplen(v.u.s);i++)jarrpush(out,jnum(i));return;}
  if(v.t!=JT_O)return;
+ if(v.u.o->k==OK_PROXY){jproxykeys(v.u.o,out);return;}
  for(o=v.u.o;o;o=o->proto){
   if(o->k==OK_ARR)for(i=0;i<o->na;i++){JStr*s=jnum2s(i);jarrpush(out,jstrv(s));}
   if(o->k>=OK_NODE&&o->k!=OK_DATE&&o->k!=OK_BOUND)continue;
@@ -1440,6 +1522,7 @@ static void jobjspread(JOb*dst,JV v){
  int i;
  if(v.t==JT_S){for(i=0;i<jcplen(v.u.s);i++)jsetown(dst,jnum2s(i),jstrat(v.u.s,i));return;}
  if(v.t!=JT_O)return;
+ if(v.u.o->k==OK_PROXY)v=jproxysnap(v);
  if(v.u.o->k==OK_ARR)for(i=0;i<v.u.o->na;i++)jsetown(dst,jnum2s(i),v.u.o->it[i]);
  for(i=0;i<v.u.o->np;i++)if(!(v.u.o->pr[i].fl&1)){JV x=v.u.o->pr[i].v;if(v.u.o->pr[i].fl&4){jrecv=v;x=jaccget(&v.u.o->pr[i],v);}jsetown(dst,v.u.o->pr[i].k,x);}}
 static int jbindpat(JNd*p,JV v,JOb*env,int kind){
@@ -1508,6 +1591,7 @@ static JV jevclass(JNd*c,JOb*env){
    fo=jmkfn(m->b,ce);fo->fl|=2;
    if(m->x){jdefacc((m->fl&JF_STATIC)?cls:proto,k,jobj(fo),m->x==2,1);continue;}
    jaddpr((m->fl&JF_STATIC)?cls:proto,k,jobj(fo),1);}
+  else if(m->op==3){JOb*sb=jmkfn(m->b,ce);jcall(jobj(sb),jobj(cls),0,0);if(jthrow)return jundef();}   /* static { } block */
   else if(m->op==2&&(m->fl&JF_STATIC)){
    JOb*fe=jnewenv(ce);JV v;
    jaddpr(fe,K_this,jobj(cls),0);
@@ -1548,6 +1632,7 @@ static JV jev(JNd*n,JOb*env){
       if(!itr)return jthrowerr(jErrT,"spread syntax requires an iterable");
       for(i=0;i<itr->na;i++)jarrpush(arr,itr->it[i]);}}
     else{a=jev(c,env);if(jthrow)return jundef();jarrpush(arr,a);}}
+   if(n->x==2)jaddpr(arr,jintc("raw"),jobj(arr),1);   /* template strings array: .raw */
    return jobj(arr);}
   case ND_OBJ:{
    JOb*o=jnewob(OK_PLAIN,jObjProto);JNd*p;
@@ -1567,6 +1652,8 @@ static JV jev(JNd*n,JOb*env){
    return jobj(fo);}
   case ND_CLASS:return jevclass(n,env);
   case ND_REGEX:return jmkregex(n->s,n->a->s);
+  case ND_AWAIT:{JV av=jev(n->a,env);if(jthrow)return jundef();return jawait(av);}
+  case ND_YIELD:return jyieldeval(n,env);
   case ND_OPT:a=jev(n->a,env);jshort=0;return a;
   case ND_MEM:
    if(n->a->t==ND_SUPER){JPr*cp=jlookup(env,K_cls);JPr*tp=jlookup(env,K_this);
@@ -1642,6 +1729,7 @@ static JV jev(JNd*n,JOb*env){
     JStr*k;
     a=jev(t->a,env);if(jthrow)return jundef();
     if(t->t==ND_MEM)k=t->s;else{b=jev(t->b,env);if(jthrow)return jundef();k=jkey(b);}
+    if(a.t==JT_O&&a.u.o->k==OK_PROXY){return jbool(jproxydel(a.u.o,k));}
     if(a.t==JT_O){
      if(a.u.o->k==OK_ARR&&jidx(k)>=0){int i=jidx(k);if(i<a.u.o->na)a.u.o->it[i]=jundef();}
      else jdelpr(a.u.o,k);}}
@@ -1768,6 +1856,7 @@ static int jexec(JNd*s,JOb*env){
     if(arr){if(i>=arr->na)break;x=arr->it[i];}
     else{if(i>=jcplen(str))break;x=jstrat(str,i);}
     i++;(void)n;
+    if(s->fl&2){x=jawait(x);if(jthrow)return JC_THROW;}
     it=(kind==1||kind==2)?jnewenv(env):env;
     jbindpat(s->a,x,it,kind);if(jthrow)return JC_THROW;
     c=jexec(s->c,it);
@@ -1911,6 +2000,7 @@ JNAT(jf_keys){
  JUNUSED;
  if(o.t==JT_S){for(i=0;i<jcplen(o.u.s);i++)jarrpush(r,jstrv(jnum2s(i)));return jobj(r);}
  if(o.t!=JT_O)return jobj(r);
+ if(o.u.o->k==OK_PROXY){jproxykeys(o.u.o,r);return jobj(r);}
  if(o.u.o->k==OK_ARR)for(i=0;i<o.u.o->na;i++)jarrpush(r,jstrv(jnum2s(i)));
  if(o.u.o->k>=OK_NODE&&o.u.o->k!=OK_DATE&&o.u.o->k!=OK_BOUND)return jobj(r);
  for(i=0;i<o.u.o->np;i++)if(!(o.u.o->pr[i].fl&1))jarrpush(r,jstrv(o.u.o->pr[i].k));
@@ -1935,6 +2025,7 @@ JNAT(jf_assign){
  if(argc<1||args[0].t!=JT_O)return jthrowerr(jErrT,"Cannot convert undefined or null to object");
  for(i=1;i<argc;i++){
   JV s=args[i];int k;
+  if(s.t==JT_O&&s.u.o->k==OK_PROXY)s=jproxysnap(s);
   if(s.t==JT_O){
    if(s.u.o->k==OK_ARR)for(k=0;k<s.u.o->na;k++)jputv(args[0],jnum(k),s.u.o->it[k]);
    for(k=0;k<s.u.o->np;k++)if(!(s.u.o->pr[k].fl&1)){JV x=s.u.o->pr[k].v;if(s.u.o->pr[k].fl&4)x=jaccget(&s.u.o->pr[k],s);jput(args[0],s.u.o->pr[k].k,x);}}}
@@ -1979,7 +2070,7 @@ JNAT(jfp_objToString){
  if(th.t==JT_O&&th.u.o->k==OK_NODE)return jcv("[object HTMLElement]");
  return jcv("[object Object]");}
 JNAT(jfp_valueOf){JUNUSED;return th;}
-JNAT(jf_isArray){JUNUSED;return jbool(argc>0&&args[0].t==JT_O&&args[0].u.o->k==OK_ARR);}
+JNAT(jf_isArray){JUNUSED;JOb*o=argc>0&&args[0].t==JT_O?args[0].u.o:0;while(o&&o->k==OK_PROXY)o=o->env;return jbool(o&&o->k==OK_ARR);}
 /* Function.prototype */
 JNAT(jfp_call){return jcall(th,JARG(0),argc>1?args+1:0,argc>1?argc-1:0);}
 JNAT(jfp_apply){
@@ -1998,6 +2089,7 @@ static JV jmkerr(JOb*proto,JV th,JV*args,int argc){
  if(th.t==JT_O&&jnewcall)e=th.u.o;else e=jnewob(OK_ERR,proto);
  e->k=OK_ERR;
  if(argc>0&&args[0].t!=JT_U){JStr*m=jtos(args[0]);jsetown(e,K_message,jstrv(m));{JPr*p=jfind(e,K_message);if(p)p->fl|=1;}}
+ if(argc>1&&args[1].t==JT_O&&jfind(args[1].u.o,jintc("cause"))){jaddpr(e,jintc("cause"),jget(args[1],jintc("cause")),1);}   /* Error cause */
  return jobj(e);}
 JNAT(jf_Error){return jmkerr(jErrProto,th,args,argc);}
 JNAT(jf_TypeError){return jmkerr(jErrT,th,args,argc);}
@@ -2106,9 +2198,11 @@ JNAT(jfa_sort){
  return th;}
 JNAT(jfa_at){int i;JTHISARR i=(int)jtonum(JARG(0));if(i<0)i+=a->na;if(i<0||i>=a->na)return jundef();return a->it[i];}
 JNAT(jf_from){
- JV s=JARG(0),f=JARG(1);JOb*r=jnewarr(8);int i,n;JUNUSED;
+ JV s=JARG(0),f=JARG(1);JOb*r=jnewarr(8),*itp;int i,n;JUNUSED;
  if(s.t==JT_S){n=jcplen(s.u.s);for(i=0;i<n;i++)jarrpush(r,jstrat(s.u.s,i));}
  else if(s.t==JT_O&&(s.u.o->k==OK_ARR||(s.u.o->fl&12))){JOb*it=jiterable(s);for(i=0;i<it->na;i++)jarrpush(r,it->it[i]);}
+ else if(s.t==JT_O&&s.u.o->k!=OK_PROXY&&(itp=jiterfrom(s))){for(i=0;i<itp->na;i++)jarrpush(r,itp->it[i]);}
+ else if(jthrow)return jundef();
  else if(s.t==JT_O){JV l=jget(s,K_length);n=(int)jtonum(l);for(i=0;i<n&&i<100000;i++){JV v=jgetv(s,jnum(i));jarrpush(r,v);}}
  if(jiscallable(f))for(i=0;i<r->na;i++){JV av[2],v;av[0]=r->it[i];av[1]=jnum(i);v=jcall(f,jundef(),av,2);if(jthrow)return jundef();r->it[i]=v;}
  return jobj(r);}
@@ -2326,6 +2420,7 @@ static void jjsonq(JSB*o,JStr*s){
  jsb_c(o,"\"");}
 static int jstr_into(JV v,JStr*ind,JStr*cur,int depth,JSB*o){ /* returns 1 if the value is skipped (undefined/function) */
  if(depth>40){jthrowerr(jErrT,"Converting circular structure to JSON");return 0;}
+ if(v.t==JT_O&&v.u.o->k==OK_PROXY){v=jproxysnap(v);if(jthrow)return 0;}
  if(v.t==JT_O){JV tj=jget(v,jcstr("toJSON"));if(jiscallable(tj)){v=jcall(tj,v,0,0);if(jthrow)return 0;}}
  switch(v.t){
   case JT_U:return 1;
@@ -3499,6 +3594,7 @@ static void jenter(void){
   jsetc(jGlob,"innerWidth",jnum(VW));jsetc(jGlob,"innerHeight",jnum(VH));}}
 static void jleave(void){
  if(--jlevel==0){
+  jmicrorun();
   jreport();
   if(joom||jtop>(10<<20)){jgc();joom=0;}}}
 static void jaddlst(N*nd,JStr*type,JV fn,int cap){
@@ -3675,6 +3771,9 @@ static JOb*jctor(const char*name,JNF fn,JOb*proto){
 static void jgset(const char*n,JV v){jaddpr(jGlob,jcstr(n),v,1);}
 static JOb*jplain(void){return jnewob(OK_PLAIN,jObjProto);}
 static void jconst(JOb*o,const char*n,double d){jaddpr(o,jcstr(n),jnum(d),3);}
+#include "mwe_js_async.h"
+#include "mwe_js_web.h"
+#include "mwe_js_proxy.h"
 static void jinit(void){
  int i;JOb*o,*f;
  jgcok=0;jingc=0;jallocd=0;jthresh=4L<<20;
@@ -3703,6 +3802,7 @@ static void jinit(void){
  jDoc=jnewob(OK_DOC,jDocProto);jDoc->dn=root;
  jLoc=jnewob(OK_DOC,jLocProto);jLoc->fl=1;
  jroot2[5]=jDoc;jroot2[6]=jLoc;
+ jinit_async();jinit_web();jinit_proxy();
  /* globals */
  jgset("window",jobj(jGlob));jgset("self",jobj(jGlob));jgset("globalThis",jobj(jGlob));jgset("top",jobj(jGlob));jgset("parent",jobj(jGlob));
  jgset("document",jobj(jDoc));jgset("location",jobj(jLoc));
@@ -3840,6 +3940,7 @@ int mwe_js_run(void){
  if(!jnscr)return 0;
  jinit();
  jenter();
+ jrunsrc(MWE_JS_PRELUDE,(int)sizeof(MWE_JS_PRELUDE)-1,"prelude");   /* web platform APIs written in JavaScript */
  for(i=0;i<jnscr;i++){
   const char*src=0;int n=0;char nm[16];int k=0;
   nm[k++]='s';nm[k++]='c';nm[k++]='r';nm[k++]='i';nm[k++]='p';nm[k++]='t';nm[k++]=' ';k+=jd2s((double)(i+1),nm+k);nm[k]=0;
@@ -3852,6 +3953,7 @@ int mwe_js_run(void){
  {JOb*e=jmkev("DOMContentLoaded",1);jfire(root,jcstr("DOMContentLoaded"),e,1);}
  {JOb*e=jmkev("load",0);jfire(&jwinn,jcstr("load"),e,0);}
  {int d=jdirty;jleave();return d||jdirty;}}
+void mwe_js_set_fetch(mwe_fetch_cb cb){jfetchcb=cb;}
 int mwe_js_eval(const char*src,int len){ /* run extra script text (tests / host consoles); 1 = page changed */
  JAPI
  if(!jready)return 0;

@@ -1,0 +1,14 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{margin:10px;font:13px sans-serif}.g div{padding:6px;color:#222}h4{margin:10px 0 4px}
+.fit{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:6px}.fit div{background:#cdf}
+.fill{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:6px}.fill div{background:#fdc}
+.areas{display:grid;grid-template-areas:"head head head" "nav main side" "foot foot foot";grid-template-columns:90px 1fr 90px;gap:6px}
+.areas .h{grid-area:head;background:#fcc}.areas .n{grid-area:nav;background:#cfc}.areas .m{grid-area:main;background:#eef;min-height:50px}.areas .s{grid-area:side;background:#ffc}.areas .f{grid-area:foot;background:#ccc}
+.lines{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;grid-auto-rows:34px}.lines div{background:#dde}
+.lines .a{grid-column:1 / span 2;background:#fcc}.lines .b{grid-column:3 / 5;grid-row:1 / span 2;background:#cfc}.lines .c{grid-column:span 2;background:#ffc}
+</style></head><body class="g">
+<h4>auto-fit (4 items stretch)</h4><div class="fit"><div>1</div><div>2</div><div>3</div><div>4</div></div>
+<h4>auto-fill (columns stay)</h4><div class="fill"><div>1</div><div>2</div><div>3</div><div>4</div></div>
+<h4>template areas</h4><div class="areas"><div class="f">footer</div><div class="s">side</div><div class="m">main</div><div class="n">nav</div><div class="h">header</div></div>
+<h4>lines / spans / auto-rows</h4><div class="lines"><div class="a">a: 1/span 2</div><div class="b">b: col 3/5, rows span 2</div><div class="c">c: span 2</div><div>d</div></div>
+</body></html>

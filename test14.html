@@ -1,0 +1,10 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{margin:10px;font:14px sans-serif}.ell{width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#eef;margin:4px 0}
+.cnt{counter-reset:sec}.cnt h4{counter-increment:sec;margin:6px 0 2px}.cnt h4::before{content:counter(sec) ". ";color:#a00}
+ol.r{list-style:none;counter-reset:i;padding:0}ol.r li{counter-increment:i}ol.r li::before{content:counter(i,upper-roman) ") "}
+ol.a{list-style:none;counter-reset:x;padding:0}ol.a li{counter-increment:x}ol.a li::before{content:"(" counter(x,lower-alpha) ") "}
+</style></head><body>
+<div class="ell">This long text is cut with an ellipsis at the end</div><div class="ell">짧은 글</div><div class="ell">한글이 길면 말줄임표로 잘립니다 한글이 길면</div>
+<div class="cnt"><h4>First heading</h4><h4>Second heading</h4><h4>Third heading</h4></div>
+<ol class="r"><li>one</li><li>two</li><li>three</li><li>four</li></ol><ol class="a"><li>apple</li><li>pear</li></ol>
+</body></html>

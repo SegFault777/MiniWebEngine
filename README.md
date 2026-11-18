@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.8** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.9** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -55,7 +55,43 @@ Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
 
-## What is new in v0.8
+## What is new in v0.9 - towards modern websites
+
+**JavaScript** (`src/mwe_js*.h`; the probe `tests/js/probe.html` goes from 30 to 55 of 59 checks, and `tests/js/modern.js` /
+`async.js` produce exactly Node's output):
+- `Promise` (spec ordering, thenables, all/allSettled/race/any/finally), `queueMicrotask`, `async`/`await`,
+  `for await`, async arrows/methods, generators (`function*`, `yield`, `yield*`), `Symbol` (+ `Symbol.iterator`,
+  `asyncIterator`, `toPrimitive`), custom iterables, class fields / `#private` members / `static {}` blocks,
+  tagged templates (`strings.raw` equals the cooked strings), `Proxy` (get/set/has/deleteProperty/ownKeys) and `Reflect`,
+  `Error` `cause`, `AggregateError`
+- web APIs (written in JavaScript, `src/mwe_js_prelude.js`): `fetch` / `Request` / `Response` / `Headers`,
+  `XMLHttpRequest`, `URL` / `URLSearchParams`, `AbortController`, `IntersectionObserver` (reports every target visible once, so lazy
+  loaders run) / `ResizeObserver` / `MutationObserver` (no-op), `matchMedia`, `customElements` (registry only), `structuredClone`,
+  `btoa`/`atob`, `TextEncoder`/`TextDecoder`, `Intl` (en-US only), `Array`/`Object`/`String` ES2019-2023 additions, `<template>.content`
+- the host supplies network access through `mwe_js_set_fetch()`; MiniBrowser connects it to its HTTP(S) stack (HSTS, mixed-content
+  blocking and certificate checks apply; CORS is **not** enforced, cookies are not sent)
+
+**Semantics that differ from browsers** (the interpreter is a tree walker without coroutines):
+- `await` does not suspend: it runs queued microtasks and timers until the promise settles. Values and errors are right, but an async
+  function runs to completion before its call returns, so code after the call runs *later* than in a browser
+- a generator body runs eagerly on the first `next()`/iteration and its values are buffered: `next(x)` input is ignored and an
+  infinite generator ends with a RangeError after 100000 values
+- symbols are unique strings; typed arrays are plain arrays (no element wrapping, no `instanceof`, no shared buffers)
+- no `BigInt`, no regular-expression named groups / lookbehind / `\p{...}`, no ES modules (`import`), no `async` generators that
+  interleave, no `Proxy` for functions, no `Worker`/`WebSocket`/`localStorage` quota
+
+**CSS**: `background-image: url()` with `background-size` (cover/contain/length/%), `background-position`, `background-repeat`;
+grid rewritten: `grid-template-areas` + `grid-area`, `grid-column` / `grid-row` lines and spans, row spans, `grid-auto-rows`,
+`repeat(auto-fit | auto-fill, minmax())` with true `auto-fit` collapsing; CSS counters (`counter-reset/-increment/-set`,
+`counter()`, `counters()`, decimal / alpha / roman); `text-overflow: ellipsis`
+
+**HTML**: `<picture>` / `<source>` (`type`, `media`) and `srcset` (`w` and `x` descriptors) choose the image source
+
+Still missing for many modern sites: inline `<svg>`, `<video>`/`<audio>`/`<canvas>`, web fonts, `z-index` stacking, `position: sticky`,
+`:has()`, `::first-letter`, CSS animations/transitions, ES modules, WebSocket/Worker, WebP/AVIF. Pages built on React/Vue/Angular bundles
+may run or may not: the engine now covers much of what they need, but it is not a conformant browser and has not been tested against them.
+
+## What was new in v0.8
 
 - **Root certificates: 142** (was 116) in two tiers, listed with SHA-256 in `roots/ROOTS.txt` and at
   `about:roots` in the browser. *Core* (116): the current Mozilla program. *Legacy* (26): roots from an
@@ -125,7 +161,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.8)
+## Supported (v0.9)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),

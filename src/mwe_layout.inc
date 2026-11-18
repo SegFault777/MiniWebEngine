@@ -3,7 +3,7 @@
  * layout state, measuring, block and inline layout, list markers.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- layout state and paint list ---- */
-typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc;char*t,*hp;N*nd,*on;}Cmd;
+typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov;char*t,*hp;N*nd,*on;}Cmd;
 static Cmd cm[MC],dm;
 static int nc,W,H,cv=0xffffff;
 static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp,tip;
@@ -69,7 +69,7 @@ static void word(char*p,int n,N*e){
  ls(ww);lx+=spw;
  met(s,&a,&h);
  c=cadd(1,lx,0,ww,h,s->vis?-1:rc(s->col,s));
- c->on=e;c->a=a;c->bg=s->disp==D_INLINE&&!s->vis?rc(s->bg,s):-1;c->fs=fs;c->tf=tf;c->u=s->ul;c->tsx=s->tsx;c->tsy=s->tsy;c->tsc=s->tsc;c->t=p;c->n=n;c->vs=s->va;c->ls=s->ls;
+ c->on=e;c->a=a;c->bg=s->disp==D_INLINE&&!s->vis?rc(s->bg,s):-1;c->fs=fs;c->tf=tf;c->u=s->ul;c->tsx=s->tsx;c->tsy=s->tsy;c->tsc=s->tsc;c->tov=s->tov;c->t=p;c->n=n;c->vs=s->va;c->ls=s->ls;
  if(curh){c->hp=curh->p;c->hn=curh->n;}
  lx+=ww;sp=0;}
 static void txtc(N*n,char*p,int len){ /* collapsed-whitespace text */
@@ -352,7 +352,7 @@ static void bside(int st,int x,int y,int w,int h,int c,int horiz){
 static void blk_(N*n,int ax,int aw);
 static void blk(N*n,int ax,int aw){N*sv=curn;curn=n;blk_(n,ax,aw);curn=sv;}
 static void blk_(N*n,int ax,int aw){
- St*s=n->s;int fwv=fw,fhv=fh,fvv=fva,iso=isol,d=s->disp,ii=-1;float ar;St sc;
+ St*s=n->s;int fwv=fw,fhv=fh,fvv=fva,iso=isol,d=s->disp,ii=-1,bi=-1;float ar;St sc;
  if(n->tag.n==3&&seq(n->tag,"img")&&(ii=imfor(n))>=0){   /* decoded image: drop the UA placeholder box (grey fill, 1px border, 16px minimum) */
   sc=*s;s=&sc;
   if(s->bg==0xF1F1F1){s->bg=-1;for(ar=0;ar<4;ar++)s->bw[(int)ar]=0;s->mnw=mk(0,0,1);s->mnh=mk(0,0,1);}}
@@ -385,8 +385,9 @@ static void blk_(N*n,int ax,int aw){
  if(mlA&&mrA){ml=mr=fr_>0?fr_/2:0;}else if(mlA)ml=fr_>0?fr_:0;
  for(i=0;i<4;i++)if(s->rad[i].k==0&&(s->rad[i].px>0||s->rad[i].pc>0))rad=1;
  if(s->shc!=-1&&(s->shx||s->shy||s->shb||s->shs))shd=1;
- box=s->bg>=0||s->gk||bt||bb||bl||br||rad||shd||ii>=0;
- cplx=(rad||s->gk||shd||ii>=0)&&nbx<8192;
+ bi=s->bim.n?imfind(s->bim):-1;
+ box=s->bg>=0||s->gk||bt||bb||bl||br||rad||shd||ii>=0||bi>=0;
+ cplx=(rad||s->gk||shd||ii>=0||bi>=0)&&nbx<8192;
  tt=!box&&!pt&&!bfc&&s->h.k==1&&fhv<0;
  bt_=!box&&!pb&&!bfc&&s->h.k==1&&fhv<0;
  if(tt){if(mt>pend)pend=mt;}else{Y+=mt>pend?mt:pend;pend=0;}
@@ -396,7 +397,7 @@ static void blk_(N*n,int ax,int aw){
   bx=&bxs[nbx];
   for(i=0;i<(int)sizeof(Bx);i++)((char*)bx)[i]=0;
   for(i=0;i<4;i++){bx->r[i]=rl(s->rad[i],tw);if(bx->r[i]<0)bx->r[i]=0;bx->bw[i]=s->bw[i];bx->bc[i]=rc(s->bc[i],s);}
-  bx->im=ii+1;bx->of=s->of;bx->bg=rc(s->bg,s);bx->gk=s->gk;bx->ga=s->ga;bx->gn=s->gn;
+  bx->im=ii+1;bx->of=s->of;bx->ibi=bi+1;bx->ibs=s->ibs;bx->ibr=s->ibr;bx->ibw=s->ibw;bx->ibh=s->ibh;bx->ibx=s->ibx;bx->iby=s->iby;bx->bg=rc(s->bg,s);bx->gk=s->gk;bx->ga=s->ga;bx->gn=s->gn;
   for(i=0;i<s->gn;i++){bx->gc[i]=rc(s->gcol[i],s);bx->gp[i]=s->gpos[i];bx->gpx[i]=s->gpx[i];}
   bx->shx=s->shx;bx->shy=s->shy;bx->shb=s->shb;bx->shs=s->shs;bx->shc=shd?rc(s->shc,s):-1;
   bp=cadd(2,x0,top,tw,0,0);bp->bi=nbx++;bp->ex=shd?(s->shb+s->shs+(s->shx<0?-s->shx:s->shx)+(s->shy<0?-s->shy:s->shy)+2):0;}

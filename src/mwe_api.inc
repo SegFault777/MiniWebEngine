@@ -54,6 +54,13 @@ void mwe_paint(unsigned*buf,int stride,int x,int y,int w,int h){
    case 1:
     if(k->bg>=0)fr(k->x,k->y,k->w,k->h,k->bg);
     if(k->tsx||k->tsy)run(k->x+k->tsx,k->y+k->a+k->tsy,k->t,k->n,k->fs,k->tf,k->ls,k->tsc,0,k->w);
+    if(k->tov&&k->x<kx1&&k->x+k->w>kx1){   /* text-overflow: ellipsis -- the part that does not fit is replaced by an ellipsis */
+     static const char el[]="\xE2\x80\xA6";
+     int ew=wid(el,3,k->fs,k->tf,k->ls),avail=kx1-k->x-ew,i=0,best=0,q;
+     while(i<k->n){q=i;u8d(k->t,k->n,&q);if(wid(k->t,q,k->fs,k->tf,k->ls)>avail)break;best=q;i=q;}
+     run(k->x,k->y+k->a,k->t,best,k->fs,k->tf,k->ls,k->c,k->u,k->w);
+     run(k->x+wid(k->t,best,k->fs,k->tf,k->ls),k->y+k->a,el,3,k->fs,k->tf,k->ls,k->c,0,ew);
+     break;}
     run(k->x,k->y+k->a,k->t,k->n,k->fs,k->tf,k->ls,k->c,k->u,k->w);break;
    case 2:b=&bxs[k->bi];b->x=k->x;b->y=k->y;b->w=k->w;b->h=k->h;pbox(b);break;
    case 4:ptri(k->x,k->y,k->w,k->u,k->c);break;}}

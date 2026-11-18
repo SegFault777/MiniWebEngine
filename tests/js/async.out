@@ -1,0 +1,27 @@
+start
+a1
+b1
+a2
+b2
+[1,2,3]
+["rejected:x","fulfilled:4"]
+fast
+2
+true
+boom
+["fin"]
+1
+thenable
+5
+timer
+true
+bad
+p
+q
+42
+method
+static
+RangeError:late
+aborted
+micro
+main done

@@ -12,7 +12,7 @@ static void defst(St*s,St*pa){
  s->shc=-1;
  for(i=0;i<4;i++){s->bw[i]=3;s->bc[i]=-3;}
  for(i=0;i<12;i++)s->gtk[i]=2;
- if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ti=pa->ti;s->tsx=pa->tsx;s->tsy=pa->tsy;s->tsc=pa->tsc;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
+ if(pa){s->col=pa->col;s->fs=pa->fs;s->bold=pa->bold;s->it=pa->it;s->ul=pa->ul;s->al=pa->al;s->tt=pa->tt;s->ws=pa->ws;s->wb=pa->wb;s->ti=pa->ti;s->tov=pa->tov;s->tsx=pa->tsx;s->tsy=pa->tsy;s->tsc=pa->tsc;s->ls=pa->ls;s->lh=pa->lh;s->lst=pa->lst;s->vis=pa->vis;s->bsp=pa->bsp;s->bcol=pa->bcol;}
  else{s->fs=16;s->lst=1;s->bsp=2;}}
 #define NV 512
 static S vnm[NV],vvl[NV];static int nvar;
@@ -117,6 +117,37 @@ static int fsize(S t,int pfs,int*ok){
  l=lenv(t,pfs);
  if(l.k==0){int v=l.px+pfs*l.pc/100;if(v>0)return v>180?180:v;}
  *ok=0;return pfs;}
+/* ---- CSS counters (document-order table; scopes are not restored on exit) ---- */
+static struct{S nm;int v;}ctr[16];static int nctr;
+static int ctrfind(S nm,int create){
+ int i,j;
+ for(i=0;i<nctr;i++)if(ctr[i].nm.n==nm.n){for(j=0;j<nm.n&&ctr[i].nm.p[j]==nm.p[j];j++){}if(j==nm.n)return i;}
+ if(!create||nctr>=16)return -1;
+ ctr[nctr].nm=nm;ctr[nctr].v=0;return nctr++;}
+static void ctrapply(St*s){
+ int i,k;
+ for(i=0;i<s->ncr;i++){k=ctrfind(s->crn[i],1);if(k>=0)ctr[k].v=s->crv[i];}
+ for(i=0;i<s->ncin;i++){k=ctrfind(s->cin[i],1);if(k>=0)ctr[k].v+=s->civ[i];}}
+static int ctrfmt(char*o,int v,S style){   /* counter value -> text in a list style */
+ int n=0,i;
+ if(kw(style,"lower-alpha")||kw(style,"upper-alpha")||kw(style,"lower-latin")||kw(style,"upper-latin")){
+  char t[8];int m=0;if(v<1)v=1;
+  while(v>0&&m<8){v--;t[m++]=(char)((kw(style,"upper-alpha")||kw(style,"upper-latin")?'A':'a')+v%26);v/=26;}
+  while(m)
+   o[n++]=t[--m];
+  return n;}
+ if(kw(style,"lower-roman")||kw(style,"upper-roman")){
+  static const int rv[13]={1000,900,500,400,100,90,50,40,10,9,5,4,1};
+  static const char*rs[13]={"m","cm","d","cd","c","xc","l","xl","x","ix","v","iv","i"};
+  int up=kw(style,"upper-roman");
+  if(v<1||v>3999)v=v<1?1:3999;
+  for(i=0;i<13;i++)while(v>=rv[i]){const char*q=rs[i];while(*q){o[n++]=(char)(up&&*q>='a'?*q-32:*q);q++;}v-=rv[i];}
+  return n;}
+ {char t[12];int m=0,neg=v<0;if(neg)v=-v;if(!v)t[m++]='0';while(v){t[m++]=(char)('0'+v%10);v/=10;}
+  if(kw(style,"decimal-leading-zero")&&m==1)t[m++]='0';
+  if(neg)o[n++]='-';
+  while(m)o[n++]=t[--m];}
+ return n;}
 static void setcont(St*s,S v){
  int i=0,o=cpp,q,c,k;char*p;
  v=trim(v);
@@ -131,12 +162,77 @@ static void setcont(St*s,S v){
      else cpool[cpp++]=v.p[i++];}
     else cpool[cpp++]=v.p[i++];}
    i++;}
+  else if(starts((S){v.p+i,v.n-i},"counter(")||starts((S){v.p+i,v.n-i},"counters(")){   /* counter(name[, style]) / counters(name, "sep"[, style]) */
+   int plural=starts((S){v.p+i,v.n-i},"counters("),a0=i+(plural?9:8),a1=a0,lv=1;
+   S pr[3];int np=0,pb=a0,k2;
+   while(a1<v.n&&lv){if(v.p[a1]=='(')lv++;else if(v.p[a1]==')'){lv--;if(!lv)break;}else if(v.p[a1]==','&&lv==1&&np<2){pr[np++]=trim((S){v.p+pb,a1-pb});pb=a1+1;}a1++;}
+   pr[np++]=trim((S){v.p+pb,a1-pb});
+   k2=ctrfind(pr[0],0);
+   if(cpp<(int)sizeof cpool-24)cpp+=ctrfmt(cpool+cpp,k2>=0?ctr[k2].v:0,np>(plural?2:1)?pr[plural?2:1]:(S){(char*)"decimal",7});
+   i=a1+1;}
   else i++;}
  (void)p;
  s->cont.n=cpp-o;s->hascont=1;}
 /* logical-property aliases (horizontal writing mode only) */
 static const struct{const char*a,*b;}PAL[]={{"inline-size","width"},{"block-size","height"},{"min-inline-size","min-width"},{"max-inline-size","max-width"},
  {"min-block-size","min-height"},{"max-block-size","max-height"},{"word-wrap","overflow-wrap"},{"grid-row-gap","row-gap"},{"grid-column-gap","column-gap"},{0,0}};
+/* ---- background-image: url() helpers ---- */
+static Len bgl(S t){   /* length / percentage / position keyword -> Len (percentages: pc=1) */
+ Len l;
+ if(kw(t,"left")||kw(t,"top"))return mk(0,1,0);
+ if(kw(t,"right")||kw(t,"bottom"))return mk(100,1,0);
+ if(kw(t,"center"))return mk(50,1,0);
+ if(t.n&&t.p[t.n-1]=='%'){l=lenv(t,16);return mk(l.px,1,0);}
+ l=lenv(t,16);
+ return l.k==0?mk(l.px,0,0):mk(0,0,1);}
+static S bgurl(S t){   /* url( "x" ) -> x */
+ S in={t.p+4,t.n-5};
+ in=trim(in);
+ if(in.n>=2&&(in.p[0]=='"'||in.p[0]=='\'')&&in.p[in.n-1]==in.p[0]){in.p++;in.n-=2;}
+ return in;}
+static int bgposkw(S t){return kw(t,"left")||kw(t,"right")||kw(t,"top")||kw(t,"bottom")||kw(t,"center");}
+static int bgposnum(S t){return t.n&&(isdg(t.p[0])||t.p[0]=='-'||t.p[0]=='.');}
+static void bgpos(St*s,S*t,int n){
+ S a=t[0],b=n>1?t[1]:t[0];
+ if(kw(a,"top")||kw(a,"bottom")||kw(b,"left")||kw(b,"right")){S x=a;a=b;b=x;}   /* vertical keyword first: swap */
+ s->ibx=bgl(a);s->iby=n>1?bgl(b):mk(50,1,0);
+ if(n==1&&(kw(a,"top")||kw(a,"bottom"))){s->iby=bgl(a);s->ibx=mk(50,1,0);}}
+static void bgshort(St*s,S*t,int n){   /* the parts of the background shorthand that concern images */
+ int i,np=0;S pos[2];
+ for(i=0;i<n;i++){
+  S a=t[i];int sl=-1,q;
+  if(starts(a,"url(")){s->bim=bgurl(a);continue;}
+  for(q=0;q<a.n;q++)if(a.p[q]=='/'){sl=q;break;}
+  if(sl>=0){   /* "center/cover": position, then size */
+   S p0={a.p,sl},sz={a.p+sl+1,a.n-sl-1};
+   if(p0.n&&np<2&&(bgposkw(p0)||bgposnum(p0)))pos[np++]=p0;
+   if(!sz.n&&i+1<n){sz=t[++i];}
+   if(kw(sz,"cover"))s->ibs=1;else if(kw(sz,"contain"))s->ibs=2;else if(sz.n){s->ibs=3;s->ibw=bgl(sz);s->ibh=i+1<n&&(bgposnum(t[i+1])||kw(t[i+1],"auto"))?bgl(t[++i]):mk(0,0,1);}
+   continue;}
+  if(kw(a,"/")){i++;if(i<n){S sz=t[i];if(kw(sz,"cover"))s->ibs=1;else if(kw(sz,"contain"))s->ibs=2;else{s->ibs=3;s->ibw=bgl(sz);s->ibh=i+1<n&&(bgposnum(t[i+1])||kw(t[i+1],"auto"))?bgl(t[++i]):mk(0,0,1);}}continue;}
+  if(kw(a,"no-repeat"))s->ibr=1;else if(kw(a,"repeat-x"))s->ibr=2;else if(kw(a,"repeat-y"))s->ibr=3;else if(kw(a,"repeat"))s->ibr=0;
+  else if((bgposkw(a)||bgposnum(a))&&np<2)pos[np++]=a;}
+ if(np)bgpos(s,pos,np);}
+/* grid-column / grid-row: "N", "span K", "N / M", "N / span K", "span K / N" and the -start / -end longhands */
+static int gnum(S t,int*isspan,int*val){   /* 1 if t is a line number or "span K" */
+ S a=trim(t);Len l;
+ *isspan=0;*val=0;
+ if(starts(a,"span")){*isspan=1;a=trim((S){a.p+4,a.n-4});}
+ if(!a.n||!(isdg(a.p[0])||a.p[0]=='-'))return 0;
+ l=lenv(a,16);
+ if(l.k!=3)return 0;
+ *val=l.px/1000;return 1;}
+static void gline(S v,S k,St*s){
+ int col=!starts(k,"grid-row"),end=kw(k,"grid-column-end")||kw(k,"grid-row-end"),only=end||kw(k,"grid-column-start")||kw(k,"grid-row-start");
+ S a=v,b={0,0};int q,sl=-1,s0=0,v0=0,s1=0,v1=0,h0,h1=0,st=0,sp=0,en=0;
+ for(q=0;q<v.n;q++)if(v.p[q]=='/'){sl=q;break;}
+ if(sl>=0){a=(S){v.p,sl};b=(S){v.p+sl+1,v.n-sl-1};}
+ h0=gnum(a,&s0,&v0);if(sl>=0)h1=gnum(b,&s1,&v1);
+ if(only){if(h0){if(end){if(s0)sp=v0;else en=v0;}else{st=v0;}}}
+ else if(h0&&!s0){st=v0;if(h1){if(s1)sp=v1;else en=v1;}}
+ else if(h0&&s0){sp=v0;if(h1&&!s1)st=v1-v0;}
+ if(col){if(st>0)s->gc0=st;if(en>0)s->gce=en;if(sp>0){s->gcs=sp>12?12:sp;}}
+ else{if(st>0)s->gr0=st;if(en>0)s->gre=en;if(sp>0)s->grs=sp>60?60:sp;}}
 static void prop(St*s,S k,S v){
  static const char*mp[]={"margin-top","margin-right","margin-bottom","margin-left"};
  static const char*pp[]={"padding-top","padding-right","padding-bottom","padding-left"};
@@ -155,8 +251,15 @@ static void prop(St*s,S k,S v){
   else if(kw(k,"text-decoration")||kw(k,"text-decoration-line"))s->ul=cpa->ul;
   return;}
  if(kw(k,"color")){c=clr(t[0]);if(c!=-2)s->col=c==-3?(cpa?cpa->col:0):c;}
+ else if(kw(k,"background-size")){
+  s->ibs=kw(t[0],"cover")?1:kw(t[0],"contain")?2:kw(t[0],"auto")&&(n<2||kw(t[1],"auto"))?0:3;
+  if(s->ibs==3){s->ibw=bgl(t[0]);s->ibh=n>1?bgl(t[1]):mk(0,0,1);}}
+ else if(kw(k,"background-repeat")){s->ibr=kw(t[0],"no-repeat")?1:kw(t[0],"repeat-x")?2:kw(t[0],"repeat-y")?3:0;}
+ else if(kw(k,"background-position")){bgpos(s,t,n);}
  else if(kw(k,"background")||kw(k,"background-color")||kw(k,"background-image")){
-  if(kw(k,"background")||kw(k,"background-image")){s->gk=0;s->gn=0;}
+  if(kw(k,"background")||kw(k,"background-image")){s->gk=0;s->gn=0;s->bim.n=0;s->bim.p=0;}
+  if(kw(k,"background")){s->ibs=0;s->ibr=0;s->ibw=s->ibh=mk(0,0,1);s->ibx=mk(0,0,0);s->iby=mk(0,0,0);bgshort(s,t,n);}
+  else if(kw(k,"background-image")){for(i=0;i<n;i++)if(starts(t[i],"url("))s->bim=bgurl(t[i]);}
   for(i=0;i<n;i++){
    if(starts(t[i],"linear-gradient")||starts(t[i],"repeating-linear-gradient"))grad(s,t[i]);
    else if(kw(k,"background-image"))continue;
@@ -198,6 +301,15 @@ static void prop(St*s,S k,S v){
    if(kw(t[1],"/")){S v2=t[2];dv=0;b_=0;for(q=0;q<v2.n;q++){if(v2.p[q]=='.'){dv=1;continue;}if(v2.p[q]>='0'&&v2.p[q]<='9'){if(dv>0){dv*=0.1f;b_+=(float)(v2.p[q]-'0')*dv;}else b_=b_*10+(float)(v2.p[q]-'0');}}}
    if(b_<=0)b_=1;}
   s->ar=a_>0?b_/a_:0;}
+ else if(kw(k,"counter-reset")||kw(k,"counter-set")||kw(k,"counter-increment")){
+  int inc=kw(k,"counter-increment"),m=0,q;
+  S*nm=inc?s->cin:s->crn;int*vv=inc?s->civ:s->crv;
+  if(!kw(t[0],"none"))for(q=0;q<n&&m<3;q++){
+   Len l2=lenv(t[q],16);
+   if(l2.k==3&&m>0)vv[m-1]=l2.px/1000;
+   else if(l2.k!=3){nm[m]=t[q];vv[m]=inc?1:0;m++;}}
+  if(inc)s->ncin=m;else s->ncr=m;}
+ else if(kw(k,"text-overflow")){s->tov=kw(t[0],"ellipsis")?1:0;}
  else if(kw(k,"text-indent")){l=lenv(t[0],s->fs);s->ti=l.k==0?l.px:0;}
  else if(kw(k,"word-break"))s->wb=kw(t[0],"break-all")?1:kw(t[0],"keep-all")?2:0;
  else if(kw(k,"white-space"))s->ws=kw(t[0],"nowrap")?1:kw(t[0],"pre")?2:(kw(t[0],"pre-wrap")||kw(t[0],"break-spaces"))?3:kw(t[0],"pre-line")?4:0;
@@ -340,6 +452,23 @@ static void prop(St*s,S k,S v){
   else if(kw(k,"border-collapse"))s->bcol=kw(t[0],"collapse");
   else if(kw(k,"border-spacing")){l=lenv(t[0],s->fs);if(l.k==0)s->bsp=l.px;}
   else if(kw(k,"content"))setcont(s,v);
+  else if(kw(k,"grid-template-areas")){   /* rows of area names: "h h" "s m" */
+   int q=0;
+   s->gtan=0;
+   while(q<v.n&&s->gtan<8){
+    while(q<v.n&&v.p[q]!='"'&&v.p[q]!='\'')q++;
+    if(q>=v.n)break;
+    {char qc=v.p[q++];int a0=q;while(q<v.n&&v.p[q]!=qc)q++;s->gta[s->gtan++]=(S){v.p+a0,q-a0};q++;}}}
+  else if(kw(k,"grid-area")){
+   int nn=0,q;S pr[4];
+   if(n==1||(n>=1&&!bgposnum(t[0]))){s->garea=t[0];}
+   else{   /* row-start / column-start / row-end / column-end */
+    for(q=0;q<n&&nn<4;q++){if(kw(t[q],"/"))continue;pr[nn++]=t[q];}
+    if(nn>0){Len l=lenv(pr[0],16);if(l.k==3)s->gr0=l.px/1000;}
+    if(nn>1){Len l=lenv(pr[1],16);if(l.k==3)s->gc0=l.px/1000;}
+    if(nn>2){Len l=lenv(pr[2],16);if(l.k==3)s->gre=l.px/1000;}
+    if(nn>3){Len l=lenv(pr[3],16);if(l.k==3)s->gce=l.px/1000;}}}
+  else if(kw(k,"grid-auto-rows")){Len l=lenv(t[0],s->fs);if(l.k==0)s->gar=l;}
   else if(kw(k,"grid-template-columns")){
    s->gtn=0;s->gtauto=0;
    for(i=0;i<n&&s->gtn<12;i++){
@@ -348,7 +477,7 @@ static void prop(St*s,S k,S v){
      if(splitc(in,a,2)<2)continue;
      m=tk(a[1],tr,4);
      if(kw(a[0],"auto-fill")||kw(a[0],"auto-fit")){
-      s->gtauto=1;s->gtmin=0;
+      s->gtauto=kw(a[0],"auto-fit")?2:1;s->gtmin=0;
       if(m&&starts(tr[0],"minmax(")){S mi[2];if(splitc((S){tr[0].p+7,tr[0].n-8},mi,2)==2){Len ml=lenv(mi[0],s->fs);if(ml.k==0)s->gtmin=ml.px;}}
       else if(m){Len ml=lenv(tr[0],s->fs);if(ml.k==0)s->gtmin=ml.px;}
       continue;}
@@ -370,8 +499,8 @@ static void prop(St*s,S k,S v){
      else if(tl.k==0){s->gtk[s->gtn]=0;s->gt[s->gtn]=tl;}
      else s->gtk[s->gtn]=2;
      s->gtn++;}}}
-  else if(kw(k,"grid-column")||kw(k,"grid-column-end")||kw(k,"grid-column-start")){
-   for(i=0;i+1<n;i++)if(kw(t[i],"span")){l=lenv(t[i+1],16);if(l.k==3){s->gcs=l.px/1000;if(s->gcs>12)s->gcs=12;}}}}}
+  else if(kw(k,"grid-column")||kw(k,"grid-column-end")||kw(k,"grid-column-start")||kw(k,"grid-row")||kw(k,"grid-row-end")||kw(k,"grid-row-start")){
+   gline(v,k,s);}}}
 static void decl(St*s,S d,int pass){
  int i=0,a,b,pd,e,imp,j;S k,v;
  while(i<d.n){

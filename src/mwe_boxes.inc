@@ -3,7 +3,7 @@
  * box painter: borders, rounded corners, gradients, shadows, background images (the Bx command).
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- rounded boxes, gradients, shadows ---- */
-typedef struct{int r[4],bw[4],bc[4],bg,gk,ga,gn,gc[6],gp[6],gpx[6],shx,shy,shb,shs,shc,x,y,w,h,im,of;}Bx;
+typedef struct{int r[4],bw[4],bc[4],bg,gk,ga,gn,gc[6],gp[6],gpx[6],shx,shy,shb,shs,shc,x,y,w,h,im,of,ibi,ibs,ibr;Len ibw,ibh,ibx,iby;}Bx;
 /* bilinear sample of image i (0xAARRGGBB) at image-space (u,v) in pixels; returns alpha in the top byte */
 static unsigned imsamp(const Im*m,float u,float v){
  int x0,y0,x1,y1,k;float fx,fy,wgt[4],a=0,r=0,g=0,b=0;unsigned p;
@@ -86,6 +86,27 @@ static void pbox(Bx*b){
    if(!ob)continue;
    bgc=b->gk?gradcol(b,fx,fy):b->bg;
    if(bgc>=0)bp(x,y,bgc,ob);
+   if(b->ibi>0){   /* background-image: size, position, repeat */
+    int ix=x0+b->bw[3],iy=y0+b->bw[0],iw_=w-b->bw[1]-b->bw[3],ih_=h-b->bw[0]-b->bw[2];
+    if(iw_>0&&ih_>0&&x>=ix&&x<ix+iw_&&y>=iy&&y<iy+ih_){
+     const Im*m=&ims[b->ibi-1];
+     float tw=(float)m->w,th=(float)m->h,ox,oy,rx,ry;
+     if(b->ibs==1||b->ibs==2){float sc1=(float)iw_/(float)m->w,sc2=(float)ih_/(float)m->h,sc=(b->ibs==1)==(sc1>sc2)?sc1:sc2;tw=(float)m->w*sc;th=(float)m->h*sc;}
+     else if(b->ibs==3){
+      if(b->ibw.k==0)tw=b->ibw.pc?(float)iw_*(float)b->ibw.px/100.0f:(float)b->ibw.px;
+      if(b->ibh.k==0)th=b->ibh.pc?(float)ih_*(float)b->ibh.px/100.0f:(float)b->ibh.px;
+      if(b->ibw.k!=0&&b->ibh.k==0)tw=th*(float)m->w/(float)m->h;
+      if(b->ibh.k!=0&&b->ibw.k==0)th=tw*(float)m->h/(float)m->w;}
+     if(tw<1)tw=1;
+     if(th<1)th=1;
+     ox=b->ibx.pc?((float)iw_-tw)*(float)b->ibx.px/100.0f:(float)b->ibx.px;
+     oy=b->iby.pc?((float)ih_-th)*(float)b->iby.px/100.0f:(float)b->iby.px;
+     rx=(float)(x-ix)-ox;ry=(float)(y-iy)-oy;
+     if(b->ibr==0||b->ibr==2){rx-=tw*(float)(int)(rx/tw);if(rx<0)rx+=tw;}
+     if(b->ibr==0||b->ibr==3){ry-=th*(float)(int)(ry/th);if(ry<0)ry+=th;}
+     if(rx>=0&&ry>=0&&rx<tw&&ry<th){
+      unsigned ip=imsamp(m,(rx+0.5f)*(float)m->w/tw,(ry+0.5f)*(float)m->h/th);
+      if(ip>>24)bp(x,y,(int)(ip&0xFFFFFF),(int)((ip>>24)*(unsigned)ob/255));}}}
    if(b->im>0){
     int ix=x0+b->bw[3],iy=y0+b->bw[0],iw_=w-b->bw[1]-b->bw[3],ih_=h-b->bw[0]-b->bw[2];
     if(iw_>0&&ih_>0&&x>=ix&&x<ix+iw_&&y>=iy&&y<iy+ih_){

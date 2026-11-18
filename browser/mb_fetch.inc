@@ -111,6 +111,8 @@ static int upgradable(const char*u){
  i=len(h);if(i>6&&!cmpi(h+i-6,".local"))return 0;
  return 1;}
 #define EP(a,b,c) do{if(page&&!quiet)errpage(a,b,c);}while(0)
+/* request details for script-initiated requests (fetch / XMLHttpRequest); reset to a plain GET by the callers */
+static const char*rqm="GET",*rqb=0,*rqh=0;static int rqbl=0,lastst=0;static char lastrh[2048];
 static int httpd(char*url,char*dst,int cap,int*olen,int page){
  int rd,n,i,port,st,he,bl,hl,tls;char host[256],path[UC],loc[UC],tc[64],ct[96],err[256];const char*p;
  for(rd=0;rd<6;rd++){
@@ -126,9 +128,19 @@ static int httpd(char*url,char*dst,int cap,int*olen,int page){
   if(*p!='/')ba("/");
   while(*p&&*p!='#')bn(p++,1);
   bs(req,sizeof req);
-  ba("GET ");ba(path);ba(" HTTP/1.1\r\nHost: ");ba(host);
+  ba(rqm);ba(" ");ba(path);ba(" HTTP/1.1\r\nHost: ");ba(host);
   if((tls&&port!=443)||(!tls&&port!=80)){char pb[8];int q=port,k=0,j;char t[8];while(q){t[k++]='0'+q%10;q/=10;}for(j=0;j<k;j++)pb[j]=t[k-1-j];pb[k]=0;ba(":");ba(pb);}
-  ba("\r\nUser-Agent: MiniBrowser/" MB_VERSION " MiniWebEngine/" MWE_VERSION "\r\nAccept: text/html,text/plain;q=0.9,*/*;q=0.5\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
+  ba("\r\nUser-Agent: MiniBrowser/" MB_VERSION " MiniWebEngine/" MWE_VERSION "\r\nAccept: text/html,text/plain;q=0.9,*/*;q=0.5\r\nAccept-Encoding: identity\r\nConnection: close\r\n");
+  if(rqh){   /* extra request headers from the script, one "name: value" per line (never Host/Content-Length/Connection) */
+   const char*q=rqh;
+   while(*q){
+    const char*e=q;
+    while(*e&&*e!='\n')e++;
+    if(e>q&&!has(q,"host:")&&!has(q,"content-length:")&&!has(q,"connection:")&&!has(q,"accept-encoding:")){bn(q,(int)(e-q));ba("\r\n");}
+    q=*e?e+1:e;}}
+  if(rqbl>0){char nb[12],t2[12];int v=rqbl,k=0,j;while(v){t2[k++]=(char)('0'+v%10);v/=10;}for(j=0;j<k;j++)nb[j]=t2[k-1-j];nb[k]=0;ba("Content-Length: ");ba(nb);ba("\r\n");}
+  ba("\r\n");
+  if(rqbl>0)bn(rqb,rqbl);
   err[0]=0;
   n=netget(host,port,tls,req,bn_,err,sizeof err);
   if(n<=0){EP(tls?"Secure connection failed":"Could not connect",err[0]?err:"The server did not respond. Check the address and your connection.",url);return 0;}
@@ -136,11 +148,14 @@ static int httpd(char*url,char*dst,int cap,int*olen,int page){
   for(he=0;he+3<n;he++)if(raw[he]=='\r'&&raw[he+1]=='\n'&&raw[he+2]=='\r'&&raw[he+3]=='\n')break;
   if(he+3>=n||!has(raw,"HTTP/")){EP("Bad response","The server sent something that is not HTTP.",url);return 0;}
   hl=he+2;
+  {int a=0,b=0;while(a<he&&raw[a]!='\n')a++;a++;while(a<he&&b<(int)sizeof lastrh-2){lastrh[b++]=raw[a]=='\r'?' ':raw[a];a++;}lastrh[b]=0;}   /* response headers for scripts */
   if(tls&&hdr(raw,hl,"strict-transport-security:",tc,sizeof tc))hsts_note(host,tc);
   st=0;for(i=0;raw[i]&&raw[i]!=' ';i++);
   while(raw[i]==' ')i++;
   while(dig(raw[i]))st=st*10+raw[i++]-'0';
-  if(st>=300&&st<400&&hdr(raw,hl,"location:",loc,sizeof loc)&&loc[0]){resolve(url,loc,tmp,UC);cpy(url,UC,tmp);if(has(url,"http"))continue;EP("Unsupported redirect","The server redirected to an unsupported address.",url);return 0;}
+  lastst=st;
+  if(st>=300&&st<400&&hdr(raw,hl,"location:",loc,sizeof loc)&&loc[0]){
+   if(st==301||st==302||st==303){rqm="GET";rqb=0;rqbl=0;}   /* these redirects turn a POST into a GET */resolve(url,loc,tmp,UC);cpy(url,UC,tmp);if(has(url,"http"))continue;EP("Unsupported redirect","The server redirected to an unsupported address.",url);return 0;}
   p=raw+he+4;bl=n-he-4;
   if(hdr(raw,hl,"transfer-encoding:",tc,sizeof tc)&&has(tc,"chunked"))bl=dechunk((char*)p,bl);
   if(hdr(raw,hl,"content-encoding:",tc,sizeof tc)&&tc[0]&&!has(tc,"identity")){

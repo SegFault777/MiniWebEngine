@@ -59,12 +59,21 @@ jobs:
           ./mwe test8.html is.bmp 520 && test -s is.bmp
           ./mwe test10.html fit.bmp 640 && test -s fit.bmp
           ./mwe test11.html flex.bmp 400 && test -s flex.bmp
+          ./mwe test12.html bg.bmp 700 && test -s bg.bmp
+          ./mwe test13.html grid.bmp 640 && test -s grid.bmp
+          ./mwe test14.html ctr.bmp 420 && test -s ctr.bmp
+          ./mwe test15.html pic.bmp 520 && test -s pic.bmp
 
       - name: No libc/POSIX name clashes (macOS SDK declares fls, ffs, ...)
         run: cc -std=gnu11 -fsyntax-only -Wall -Wextra tests/clash.c
 
       - name: JavaScript regression tests
         run: sh tests/js/run.sh
+
+      - name: JavaScript prelude header is up to date
+        run: |
+          python3 tools/gen_prelude.py
+          git diff --exit-code src/mwe_js_prelude.h
 
       - name: Embedded root certificates parse and are usable
         run: cc -std=gnu11 -O1 -Wall -Wextra tests/roots_check.c -o roots_check && ./roots_check
