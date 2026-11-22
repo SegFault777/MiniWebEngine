@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.10"
+#define MB_VERSION "0.11"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* Non-blocking TCP sockets (v0.10). Nothing in the core ever waits on the network; the platform layer must
@@ -46,7 +46,7 @@ const char *mb_root_name(int i, int *legacy, const char **sha256hex);   /* name;
 
 /* ---- implemented by the core ---- */
 enum { MBK_BACKSPACE = 1, MBK_DELETE, MBK_ENTER, MBK_LEFT, MBK_RIGHT, MBK_HOME, MBK_END,
-       MBK_UP, MBK_DOWN, MBK_PGUP, MBK_PGDN, MBK_ESC, MBK_F5, MBK_FOCUS_URL, MBK_BACK, MBK_FORWARD };
+       MBK_UP, MBK_DOWN, MBK_PGUP, MBK_PGDN, MBK_ESC, MBK_F5, MBK_FOCUS_URL, MBK_BACK, MBK_FORWARD, MBK_TAB, MBK_SHIFT_TAB };
 void mb_init(const char *start_url, int w, int h);
 void mb_resize(int w, int h);
 void mb_draw(unsigned *px);                 /* full window, w*h pixels, 0x00RRGGBB */

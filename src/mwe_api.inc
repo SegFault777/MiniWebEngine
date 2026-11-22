@@ -3,13 +3,14 @@
  * public API (mwe.h), JavaScript glue, command-line tool.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 #include "mwe_js.h"
+#include "mwe_forms.h"
 
 /* ---- public API ---- */
 int mwe_load(char*html,int len){
  int i;
  nims=0;ipn=0;xpn=0;
  if(len>=3&&(u8)html[0]==0xEF&&(u8)html[1]==0xBB&&(u8)html[2]==0xBF){html+=3;len-=3;}  /* UTF-8 byte order mark */
- ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
+ focn=0;focpos=0;ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
  for(i=0;i<4;i++)qb[i]=(i&1)?(1<<30):0;
  css((S){(char*)UA,sl(UA)});
  jready=0;jnscr=0;jlevel=0;jrec=1;
@@ -20,14 +21,34 @@ int mwe_load(char*html,int len){
 void mwe_viewport_h(int h){VH=h<100?100:h;}
 void mwe_add_css(char*text,int len){css((S){text,len});}
 const char*mwe_stylesheet(int i,int*len){if(i<0||i>=nss)return 0;*len=sshref[i].n;return sshref[i].p;}
+/* Paint order: boxes with a higher stacking key are drawn later (and hit-tested first). Stable, so equal keys keep document order. */
+static int zo[MC],zt[MC];
+static void zsort(void){
+ int i,j,w,n=nc>MC?MC:nc,any=0;
+ for(i=0;i<n;i++){zo[i]=i;if(cm[i].z)any=1;}
+ if(!any)return;
+ for(w=1;w<n;w*=2){   /* bottom-up stable merge sort of the index array */
+  for(i=0;i<n;i+=2*w){
+   int a=i,b=i+w<n?i+w:n,ae=b,be=i+2*w<n?i+2*w:n,k=i;
+   while(a<ae&&b<be)zt[k++]=cm[zo[b]].z<cm[zo[a]].z?zo[b++]:zo[a++];
+   while(a<ae)zt[k++]=zo[a++];
+   while(b<be)zt[k++]=zo[b++];}
+  for(i=0;i<n;i++)zo[i]=zt[i];}
+ {static char done[MC];Cmd tmp;   /* apply the permutation in place (cycle following) */
+  for(i=0;i<n;i++)done[i]=0;
+  for(i=0;i<n;i++){
+   if(done[i]||zo[i]==i){done[i]=1;continue;}
+   tmp=cm[i];j=i;
+   for(;;){int s=zo[j];done[j]=1;if(s==i){cm[j]=tmp;break;}cm[j]=cm[s];j=s;}}}}
 int mwe_layout(int width){
  N*c,*d;
  if(width<16)width=16;
  W=VW=width;
  restyle();
- nc=0;nbx=0;nclp=0;nf=0;nab=0;scp=0;Y=0;pend=0;LH=LA=LD=0;lx=lsx=cx=0;cw=W;lend=W;lf=0;ca=0;sp=0;bulp=0;curh=0;curop=255;curcl=0;isol=0;fw=fh=-1;fva=0;fch=-1;ng=0;padp=0;tip=0;
+ nc=0;nbx=0;nclp=0;nf=0;nab=0;scp=0;Y=0;pend=0;LH=LA=LD=0;lx=lsx=cx=0;cw=W;lend=W;lf=0;ca=0;sp=0;bulp=0;curh=0;curop=255;curcl=0;curz=curz2=curctx=0;isol=0;fw=fh=-1;fva=0;fch=-1;ng=0;padp=0;tip=0;
  walk(root);nl();
  {int ey=Y+pend;doabs();Y=ey;pend=0;}
+ zsort();
  H=Y;if(H<1)H=1;if(H>400000)H=400000;
  for(c=root->kid;c;c=c->nx)if(c->tag.n&&c->s){if(c->s->disp==D_NONE)continue;
   if(seq(c->tag,"html")){if(c->s->bg>=0)cv=c->s->bg;for(d=c->kid;d;d=d->nx)if(d->tag.n&&seq(d->tag,"body")&&d->s&&d->s->bg>=0)cv=d->s->bg;}

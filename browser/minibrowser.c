@@ -15,6 +15,7 @@
 #include "mb_state.inc"   /* globals: viewport, scroll, history, security state */
 #include "mb_str.inc"     /* string builder, URL helpers */
 #include "mb_fetch.inc"   /* file/HTTP page sources, HSTS, mixed content */
+#include "mb_cookie.inc"  /* cookie jar, document.cookie */
 #include "mb_net.inc"     /* asynchronous HTTP(S): request state machine, queue, cache */
 #include "mb_nav.inc"     /* load pipeline, HTTPS-first, subresources, history */
 #include "mb_ui.inc"      /* drawing, lock badge, connection panel */

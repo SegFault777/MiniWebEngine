@@ -56,7 +56,6 @@ static int imgbudget;
 
 static int capof(int k){return k==K_PAGE?PG-1:k==K_CSS?(1<<18):k==K_JS||k==K_JSA?(1<<20):(RBUF-(1<<16));}
 static int tot_ms(int k){return k==K_PAGE?T_TOTAL:T_TOTAL_SUB;}
-static int strcmp_(const char*a,const char*b){while(*a&&*a==*b){a++;b++;}return *a-*b;}
 static int memeq(const char*a,const char*b,int n){int i;for(i=0;i<n;i++)if(a[i]!=b[i])return 0;return 1;}
 static void ba_int(long long v){char t[24];int k=0;if(v<0){ba("-");v=-v;}if(!v)t[k++]='0';while(v){t[k++]=(char)('0'+v%10);v/=10;}while(k)bn(&t[--k],1);}
 static void* mcopy(void*d,const void*s,int n){char*a=(char*)d;const char*b=(const char*)s;int i;if(a<b){for(i=0;i<n;i++)a[i]=b[i];}else for(i=n-1;i>=0;i--)a[i]=b[i];return d;}
@@ -118,6 +117,9 @@ static int rq_build(Rq*r,int si){
  ba("\r\nUser-Agent: MiniBrowser/" MB_VERSION " MiniWebEngine/" MWE_VERSION "\r\nAccept: ");
  ba(r->w[0].kind==K_PAGE?"text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,*/*;q=0.5":r->w[0].kind==K_CSS?"text/css,*/*;q=0.1":r->w[0].kind==K_IMG?"image/png,image/jpeg,image/gif,image/bmp,*/*;q=0.5":"*/*");
  ba("\r\nAccept-Encoding: identity\r\nConnection: close\r\n");
+ {char ck[4096],ph_[128],pp_[8];int hs_,cross=0;
+  if(r->w[0].kind!=K_PAGE&&cur[0]){urlparts(cur,ph_,sizeof ph_,pp_,sizeof pp_,&hs_);cross=!samesite(ph_,r->host);}
+  if(cookie_header(r->url,ck,sizeof ck,cross,0)){ba("Cookie: ");ba(ck);ba("\r\n");}}
  s=r->xh;
  while(*s){   /* extra request headers from a script, one "name: value" per line (never Host/Content-Length/Connection) */
   const char*e=s;
@@ -190,6 +192,9 @@ static int rq_headers(Rq*r){
  while(dig(b[i]))st=st*10+b[i++]-'0';
  r->status=st;
  if(r->tls&&hdr(b,hl,"strict-transport-security:",tc,sizeof tc))hsts_note(r->host,tc);
+ {int cross=0;char ph_[128],pp_[8];int hs_;
+  if(kind!=K_PAGE&&cur[0]){urlparts(cur,ph_,sizeof ph_,pp_,sizeof pp_,&hs_);cross=!samesite(ph_,r->host);}
+  cookies_from_headers(b,hl,r->url,cross);}
  if(st>=300&&st<400&&hdr(b,hl,"location:",loc,sizeof loc)&&loc[0]){
   if(++r->redir>MAXREDIR){rq_fail(r,"Too many redirects","The server redirected too many times.");return -1;}
   if(st==301||st==302||st==303){cpy(r->m,sizeof r->m,"GET");r->pbl=0;}   /* these redirects turn a POST into a GET */

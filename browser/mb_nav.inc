@@ -241,6 +241,26 @@ static void go(const char*in,int push){
  navgen++;pendpush=push;want_sy=-1;
  if(!push&&!cmpi(u,cur))cache_flush();      /* reload: fetch everything again */
  start_nav(u);}
+/* a form was submitted (Enter in a field, or a submit button): GET -> address with ?query, POST -> request with a body */
+static void post_nav(const char*url,const char*body,int bl){
+ net_cancel_all();navgen++;pendpush=1;want_sy=-1;
+ loading=1;tnav=mb_plat_ms();tcommit=0;tsettle=0;
+ cpy(ub,UC,url);ucur=len(ub);usel=0;uoff=0;
+ net_enqueue(K_PAGE,0,0,url,"POST","Content-Type: application/x-www-form-urlencoded",body,bl,0,0);
+ cpy(stt,UC,"Sending form...");}
+static void formpoll(void){
+ const char*m,*a,*d;int dl,i;char act[UC],full[UC];
+ if(!mwe_form_submit(&m,&a,&d,&dl))return;
+ for(i=0;a[i]&&i<UC-1;i++)act[i]=a[i];
+ act[i]=0;
+ if(!act[0])cpy(full,UC,cur);else resolve(cur,act,full,UC);
+ for(i=0;full[i];i++)if(full[i]=='#'){full[i]=0;break;}
+ if(m[0]=='G'){
+  for(i=0;full[i];i++)if(full[i]=='?'){full[i]=0;break;}   /* the form's fields replace the query */
+  if(dl>0&&len(full)+dl+2<UC){bs(act,UC);ba(full);ba("?");bn(d,dl);cpy(full,UC,act);}
+  go(full,1);}
+ else if(has(full,"http"))post_nav(full,d,dl);
+ else go(full,1);}
 static void hgo(int d){
  int t=hi+d;
  if(t<0||t>=hn)return;
@@ -297,6 +317,7 @@ int mb_tick(void){ /* called by the platform every ~16 ms; 1 = redraw needed */
 void mb_init(const char*start,int w,int h){
  mwe_js_set_fetch_async(js_fetch_start,js_fetch_abort);
  mwe_js_set_poll(js_poll);
+ mwe_js_set_cookies(js_cookie_get,js_cookie_set);
  Wd=w;Ht=h;sy=0;hn=hi=0;uf=0;
  ufirst=1;go(start&&start[0]?start:"about:home",1);ufirst=0;}
 void mb_resize(int w,int h){Wd=w;Ht=h;if(ready)relayout();}

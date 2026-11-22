@@ -6,7 +6,7 @@
 static void doabs(void){
  int i,bx,by,bw,bh,mn,mx,eh,wb,l,r,t,b,x,y,hh;N*c;St*s;
  for(i=0;i<nab;i++){
-  c=abq[i].n;s=c->s;
+  c=abq[i].n;s=c->s;curz=abq[i].z1;curz2=abq[i].z2;curctx=abq[i].ctx;
   if(abq[i].cb&&abq[i].cb->x1>abq[i].cb->x0){bx=abq[i].cb->x0;by=abq[i].cb->y0;bw=abq[i].cb->x1-bx;bh=abq[i].cb->y1-by;}
   else{bx=0;by=0;bw=W;bh=VH;}
   cx=bx;cw=bw;
@@ -20,4 +20,5 @@ static void doabs(void){
   x=l!=AU?bx+l:r!=AU?bx+bw-r-wb-mlr(s,bw):abq[i].sx;
   y=t!=AU?by+t:b!=AU?by+bh-b-hh:abq[i].sy;
   Y=y;pend=0;
-  lay_at(c,x,wb+mlr(s,bw),y,wb,-1,0,0);}}
+  lay_at(c,x,wb+mlr(s,bw),y,wb,-1,0,0);}
+ curz=curz2=curctx=0;}

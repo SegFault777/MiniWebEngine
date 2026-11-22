@@ -15,6 +15,7 @@ static int lw(int c){return c>='A'&&c<='Z'?c+32:c;}
 static int has(const char*s,const char*p){while(*p){if(lw(*s)!=lw(*p))return 0;s++;p++;}return 1;}
 static int hexv(int c){c=lw(c);return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1;}
 static int dig(int c){return c>='0'&&c<='9';}
+static int strcmp_(const char*a,const char*b){while(*a&&*a==*b){a++;b++;}return *a-*b;}
 
 /* ---- URLs ---- */
 static void dots(char*s){

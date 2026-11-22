@@ -42,6 +42,7 @@ void mb_click(int x,int y){
   if(x<Wd-SBW&&y>=TB&&y<Ht-SBH){
    jr=mwe_event_click(x,y-TB+sy);
    if(jr&1){relayout();settitle();}
+   {int l1=navgen;formpoll();if(navgen!=l1)return;}
    {int l0=navgen;pump();if(navgen!=l0)return;}}
   if(jr&2)return;
   if(hl){if(u[0]=='#')return;go(u,1);}
@@ -60,7 +61,16 @@ static void ins(const char*s,int n){
  ucur+=n;}
 void mb_char(int c){
  char b[5];int n;
- if(!uf&&c>=32&&c!=127&&ready){
+  if(!uf&&c>=32&&c!=127&&ready){
+  if(mwe_focus_kind()){   /* a form control has the focus: type into it (a script may veto the keydown first) */
+   char t[5];int tn;
+   if(c<0x80){t[0]=(char)c;tn=1;}
+   else if(c<0x800){t[0]=(char)(0xC0|c>>6);t[1]=(char)(0x80|(c&63));tn=2;}
+   else if(c<0x10000){t[0]=(char)(0xE0|c>>12);t[1]=(char)(0x80|(c>>6&63));t[2]=(char)(0x80|(c&63));tn=3;}
+   else{t[0]=(char)(0xF0|c>>18);t[1]=(char)(0x80|(c>>12&63));t[2]=(char)(0x80|(c>>6&63));t[3]=(char)(0x80|(c&63));tn=4;}
+   t[tn]=0;
+   if(!(mwe_event_key("keydown",t)&2)&&mwe_input_text(t,tn))relayout();
+   formpoll();pump();return;}
   if(c<0x80){b[0]=(char)c;n=1;}
   else if(c<0x800){b[0]=(char)(0xC0|c>>6);b[1]=(char)(0x80|(c&63));n=2;}
   else if(c<0x10000){b[0]=(char)(0xE0|c>>12);b[1]=(char)(0x80|(c>>6&63));b[2]=(char)(0x80|(c&63));n=3;}
@@ -77,7 +87,7 @@ void mb_char(int c){
  ins(b,n);}
 void mb_paste(const char*s,int n){
  char b[UC];int i,o=0;
- if(!uf)return;
+ if(!uf){if(ready&&mwe_focus_kind()){if(mwe_input_text(s,n))relayout();formpoll();}return;}
  for(i=0;i<n&&o<UC-1;i++)if(s[i]!='\r'&&s[i]!='\n')b[o++]=s[i];
  ins(b,o);}
 void mb_key(int k){
@@ -108,7 +118,16 @@ void mb_key(int k){
  if(ready){
   const char*kn=k==MBK_ENTER?"Enter":k==MBK_LEFT?"ArrowLeft":k==MBK_RIGHT?"ArrowRight":k==MBK_UP?"ArrowUp":k==MBK_DOWN?"ArrowDown":
    k==MBK_ESC?"Escape":k==MBK_BACKSPACE?"Backspace":k==MBK_DELETE?"Delete":k==MBK_HOME?"Home":k==MBK_END?"End":k==MBK_PGUP?"PageUp":k==MBK_PGDN?"PageDown":0;
-  if(kn){int r=mwe_event_key("keydown",kn);if(r&1)relayout();pump();if(r&2)return;}}
+  if(k==MBK_TAB||k==MBK_SHIFT_TAB)kn=k==MBK_TAB?"Tab":"ShiftTab";
+  if(kn){
+   int r=mwe_event_key("keydown",kn);
+   if(r&1)relayout();
+   if(!(r&2)&&mwe_focus_kind()){   /* editing keys go to the focused form control */
+    int e=mwe_input_key(kn);
+    if(e&1)relayout();
+    formpoll();pump();
+    if(mwe_focus_kind()||(e&1))return;}
+   else{pump();if(r&2)return;}}}
  if(k==MBK_UP)sy-=48;else if(k==MBK_DOWN)sy+=48;
  else if(k==MBK_PGUP)sy-=chh-40;else if(k==MBK_PGDN)sy+=chh-40;
  else if(k==MBK_HOME)sy=0;else if(k==MBK_END)sy=mx;

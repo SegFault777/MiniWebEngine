@@ -25,7 +25,8 @@ static const char UA[]=
 "input[type=checkbox],input[type=radio]{width:13px;height:13px;padding:0;margin:3px 3px 3px 4px}input[type=radio]{border-radius:50%}"
 "input[type=checkbox][checked],input[type=radio][checked]{background:#0b57d0;border-color:#0b57d0}"
 "button,input[type=button],input[type=submit],input[type=reset]{width:auto;background:#efefef;border:1px solid #767676;border-radius:3px;padding:2px 10px;text-align:center}"
-"select{padding:2px 22px 2px 6px;min-width:60px}textarea{width:200px;height:56px;vertical-align:top}"
+"select{padding:2px 22px 2px 6px;min-width:60px}textarea{width:200px;height:56px;vertical-align:top;white-space:pre-wrap;overflow:hidden}"
+"input:focus,textarea:focus,select:focus,button:focus{border-color:#0b57d0;box-shadow:0 0 0 2px #a8c7fa}"
 "label{display:inline}details>summary{display:block;padding-left:18px}"
 "code,kbd,samp,tt{font-size:.92em;background:#f3f3f3;padding:0 3px;border-radius:3px}kbd{border:1px solid #c8c8c8;border-bottom-width:2px;background:#fafafa}"
 "abbr[title],acronym[title]{text-decoration:underline}progress,meter{display:inline-block;width:160px;height:1em;background:#e6e6e6;border-radius:4px;vertical-align:middle}"
@@ -124,11 +125,28 @@ static void gens(N*c,St*s){
   int btn=seq(ty,"submit")||seq(ty,"button")||seq(ty,"reset");
   int tx=!ty.p||!ty.n||seq(ty,"text")||seq(ty,"search")||seq(ty,"email")||seq(ty,"url")||seq(ty,"tel")||seq(ty,"number")||seq(ty,"password");
   if(btn){txt=va.p&&va.n?va:seq(ty,"submit")?(S){(char*)"Submit",6}:seq(ty,"reset")?(S){(char*)"Reset",5}:(S){0,0};}
+  else if(tx&&c==focn){   /* being edited: the value with a caret at focpos (password: bullets) */
+   int o=cpp,k=0,pw=seq(ty,"password"),cp;
+   while(k<=va.n&&cpp<(int)sizeof cpool-24){
+    if(k==focpos)cpp+=put8(cpool+cpp,'|');
+    if(k>=va.n)break;
+    cp=u8d(va.p,va.n,&k);
+    if(cpp<(int)sizeof cpool-8)cpp+=put8(cpool+cpp,pw?0x2022:cp);}
+   txt=(S){cpool+o,cpp-o};}
   else if(tx){
    if(va.p&&va.n){
     if(seq(ty,"password")){int k,o=cpp;for(k=0;k<va.n&&k<48&&cpp<(int)sizeof cpool-8;k++)cpp+=put8(cpool+cpp,0x2022);txt=(S){cpool+o,cpp-o};}
     else txt=va;}
    else if(ph.p&&ph.n){txt=ph;col=0x757575;}}}
+ else if(seq(c->tag,"textarea")&&c==focn){   /* its text is hidden by walk(); show a copy with the caret */
+  N*t;S va={0,0};int o=cpp,k=0,cp;
+  for(t=c->kid;t;t=t->nx)if(!t->tag.n&&!t->gen){va=t->txt;break;}
+  while(k<=va.n&&cpp<(int)sizeof cpool-24){
+   if(k==focpos)cpp+=put8(cpool+cpp,'|');
+   if(k>=va.n)break;
+   cp=u8d(va.p,va.n,&k);
+   if(cpp<(int)sizeof cpool-8)cpp+=put8(cpool+cpp,cp);}
+  txt=(S){cpool+o,cpp-o};}
  else if(seq(c->tag,"img")){S al_=getattr(c,"alt");if(al_.p&&al_.n&&imfor(c)<0)txt=al_;}
  else if(seq(c->tag,"select")){N*o=findopt(c);if(o){N*t;for(t=o->kid;t;t=t->nx)if(!t->tag.n){txt=trim(t->txt);break;}}}
  g=findgen(c,3);

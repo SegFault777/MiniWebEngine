@@ -21,7 +21,7 @@ typedef struct{char*p;int n;}S;
 typedef struct{int px,pc,k;}Len; /* px + pc% ; k: 0 length, 1 auto, 2 invalid, 3 plain number (px = value*1000) */
 enum{D_NONE,D_BLOCK,D_INLINE,D_IB,D_X4,D_TABLE,D_ROW,D_CELL,D_LI,D_RG};
 typedef struct{
- int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,wb,ti,of,tov,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,
+ int disp,fx,gr,col,bg,fs,bold,it,ul,al,tt,ws,wb,ti,of,tov,ls,va,vaa,lh,lst,vis,op,bs,ov,fl,clr,pos,bsp,bcol,fdir,fwrap,jc,ai,as,fgrow,fshr,ord,hascont,gtn,gtauto,gtmin,gcs,zi,zset,
      shx,shy,shb,shs,shc,gk,ga,gn,tsx,tsy,tsc;
 
  float ar;
@@ -33,5 +33,6 @@ typedef struct{
  S cont;
 }St;
 typedef struct N N;
+static N*focn;static int focpos;   /* focused form control and caret (byte offset into its value) */
 struct N{N*par,*kid,*last,*nx,*pv,*lel;S tag,txt,id,cls,sty,href,at;St*s;int det,gen,x0,y0,x1,y1;void*jw;};
 static int imfor(N*n);

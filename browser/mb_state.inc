@@ -18,5 +18,6 @@ static mb_tls_info_t pinfo;static char phost[128];  /* TLS details of the page t
 static char hsts[16][96];static char hsub[16];static int nhsts;   /* HTTP Strict Transport Security hosts (this session) */
 
 /* v0.10 asynchronous loading (mb_net / mb_nav) */
+static void formpoll(void);
 static int loading,navgen,pendpush,want_sy=-1,rdirty_,inpump;
 static long long tnav,tcommit,tsettle,lastrl;

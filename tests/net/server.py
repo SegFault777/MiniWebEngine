@@ -50,7 +50,34 @@ var ac=new AbortController();fetch('/hang',{signal:ac.signal}).catch(function(e)
 (async function(){var r=await fetch('/api');var j=await r.json();document.getElementById('o').textContent='await:'+j.n;console.log('await done '+j.n);})();
 console.log('main script end');
 </script></body></html>""")
+            if p=="/form.html":return self.send(200,b"""<html><head><title>form</title></head><body>
+<form action="/echo" method="get"><input name=q id=q placeholder="search"><input type=checkbox name=c value=yes checked><select name=s><option value=a>A</option><option value=b selected>B</option></select><input type=submit value=Go name=go></form>
+<form action="/echo" method="post"><textarea name=t>hi</textarea><input name=u value="x y"><button>Post</button></form></body></html>""")
+            if p=="/echo":
+                q=self.path.partition("?")[2]
+                return self.send(200,("<html><head><title>echo GET %s</title></head><body>%s</body></html>"%(q,q)).encode())
+            if p=="/setck":
+                self.send_response(200);self.send_header("Content-Type","text/html")
+                for c in ("sid=abc123; Path=/","pref=dark; Max-Age=3600; Path=/","secret=hid; HttpOnly; Path=/","sec=1; Secure; Path=/","evil=1; Domain=example.com; Path=/","gone=1; Path=/","narrow=x; Path=/only"):
+                    self.send_header("Set-Cookie",c)
+                body=b"<html><head><title>cookies set</title></head><body>ok</body></html>"
+                self.send_header("Content-Length",str(len(body)));self.send_header("Connection","close");self.end_headers();self.wfile.write(body);return
+            if p=="/delck":
+                self.send_response(200);self.send_header("Set-Cookie","gone=; Max-Age=0; Path=/");body=b"<html><title>del</title></html>"
+                self.send_header("Content-Length",str(len(body)));self.send_header("Connection","close");self.end_headers();self.wfile.write(body);return
+            if p=="/ck":return self.send(200,("<html><head><title>Cookie: %s</title></head></html>"%self.headers.get("Cookie","(none)")).encode())
+            if p=="/only/ck":return self.send(200,("<html><head><title>Cookie: %s</title></head></html>"%self.headers.get("Cookie","(none)")).encode())
+            if p=="/jsck.html":return self.send(200,b"""<html><head><title>jsck</title></head><body><script>
+console.log('doc.cookie='+document.cookie);
+document.cookie='fromjs=7; Path=/'; document.cookie='bad=1; HttpOnly';
+console.log('after='+document.cookie);
+fetch('/ck').then(function(r){return r.text()}).then(function(t){console.log('fetch saw '+t.match(/<title>(.*)<\/title>/)[1]);});
+</script></body></html>""")
             self.send(404,b"nope")
         except (BrokenPipeError,ConnectionResetError):pass
+    def do_POST(self):
+        n=int(self.headers.get("Content-Length","0"));b=self.rfile.read(n).decode()
+        ct=self.headers.get("Content-Type","")
+        self.send(200,("<html><head><title>echo POST %s | %s</title></head><body>x</body></html>"%(b,ct)).encode())
 if __name__=="__main__":
     ThreadingHTTPServer(("127.0.0.1",int(sys.argv[1])),H).serve_forever()

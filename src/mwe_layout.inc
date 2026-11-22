@@ -3,20 +3,21 @@
  * layout state, measuring, block and inline layout, list markers.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- layout state and paint list ---- */
-typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov;char*t,*hp;N*nd,*on;}Cmd;
+typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov,z;char*t,*hp;N*nd,*on;}Cmd;
 static Cmd cm[MC],dm;
 static int nc,W,H,cv=0xffffff;
 static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp,tip;
 static Cmd*bulp;static S*curh;
+static int curz,curz2,curctx;   /* stacking: key of the innermost positioned box (and of the one inside a stacking context) */
 static int curop=255,curcl=0,isol,fw=-1,fh=-1,fva,fch=-1,ng,ibA[64];
 typedef struct{int x,y,w,h,side;}Fl;static Fl flst[64];static int nf;
 typedef struct{int x0,y0,x1,y1,par;}Clp;static Clp clps[512];static int nclp;
-typedef struct{N*n,*cb;int sx,sy;}Ab;static Ab abq[64];static int nab;
+typedef struct{N*n,*cb;int sx,sy,z1,z2,ctx;}Ab;static Ab abq[64];static int nab;
 static N*curn;
 static Cmd*cadd(int k,int x,int y,int w,int h,int c){
  Cmd*p=nc<MC?&cm[nc++]:&dm;
  p->k=k;p->x=x;p->y=y;p->w=w;p->h=h;p->a=0;p->c=c;p->bg=-1;p->fs=16;p->tf=p->u=p->n=p->hn=p->vs=p->ls=p->bi=p->grp=p->ex=0;
- p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
+ p->z=curz*8192+curz2;p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
 static int rc(int c,St*s){return c==-3?s->col:c;}
 static void fbounds(int y,int h,int*l,int*r){
  int i;
@@ -292,7 +293,7 @@ static void walk(N*n){
  N*c;St*s;int a,h,op0,open,closed=0,lpx,rpx;S*old;
  if(seq(n->tag,"details")){open=(getattr(n,"open").p!=0)^(n->det&1);closed=!open;}
  for(c=n->kid;c;c=c->nx){
-  if(!c->tag.n){if(!closed)txt(c);continue;}
+  if(!c->tag.n){if(!closed&&!(n==focn&&seq(n->tag,"textarea")))txt(c);continue;}
   s=c->s;
   if(!s||s->disp==D_NONE)continue;
   if(closed&&!seq(c->tag,"summary"))continue;
@@ -300,7 +301,7 @@ static void walk(N*n){
    if(nab<64){N*p=c->par,*cb=0;
     while(p&&p!=root){if(p->s&&p->s->pos>=1&&p->s->disp!=D_INLINE){cb=p;break;}p=p->par;}
     if(s->pos==3)cb=0;
-    abq[nab].n=c;abq[nab].cb=cb;abq[nab].sx=cx;abq[nab].sy=Y+(LH?0:pend);nab++;}
+    abq[nab].n=c;abq[nab].cb=cb;abq[nab].sx=cx;abq[nab].sy=Y+(LH?0:pend);abq[nab].z1=curz;abq[nab].z2=curz2;abq[nab].ctx=curctx;nab++;}
    continue;}
   old=curh;if(c->href.n&&seq(c->tag,"a"))curh=&c->href;
   op0=curop;if(s->op<255)curop=curop*s->op/255;
@@ -358,7 +359,7 @@ static void blk_(N*n,int ax,int aw){
   if(s->bg==0xF1F1F1){s->bg=-1;for(ar=0;ar<4;ar++)s->bw[(int)ar]=0;s->mnw=mk(0,0,1);s->mnh=mk(0,0,1);}}
  ar=ii>=0?(float)ims[ii].h/(float)ims[ii].w:s->ar;
  int ml,mr,mt,mb,pl,pr,pt,pb,bl,br,bt,bb,eh,ev,w,box,cplx,bfc,tt,bt_,top,x0,tw,ys,i,nf0=nf,c0=nc,c1,hcnt=-1,autoh,fin,bh;
- int ocx=cx,ocw=cw,oca=ca,oop=curop,ocl=curcl,as,de,mlA=s->m[3].k==1,mrA=s->m[1].k==1,rad=0,shd=0,cli=-1,lim,fr_;
+ int oz_=curz,oz2_=curz2,octx_=curctx,ocx=cx,ocw=cw,oca=ca,oop=curop,ocl=curcl,as,de,mlA=s->m[3].k==1,mrA=s->m[1].k==1,rad=0,shd=0,cli=-1,lim,fr_;
  Cmd*bp=0;Bx*bx=0;
  fw=fh=-1;fva=0;isol=0;
  mt=rl(s->m[0],aw);mb=rl(s->m[2],aw);ml=rl(s->m[3],aw);mr=rl(s->m[1],aw);
@@ -393,6 +394,7 @@ static void blk_(N*n,int ax,int aw){
  if(tt){if(mt>pend)pend=mt;}else{Y+=mt>pend?mt:pend;pend=0;}
  top=Y;x0=ax+ml;tw=w+eh;
  if(s->op<255)curop=curop*s->op/255;
+ if(s->pos>=1){int k=(s->zset?s->zi:0)*2+1;if(!curctx){curz=k;curz2=0;if(s->zset)curctx=1;}else curz2=k;}
  if(cplx){
   bx=&bxs[nbx];
   for(i=0;i<(int)sizeof(Bx);i++)((char*)bx)[i]=0;
@@ -461,5 +463,5 @@ static void blk_(N*n,int ax,int aw){
   if(dx||dy)for(i=c0;i<nc;i++){cm[i].x+=dx;cm[i].y+=dy;}
   n->x0=x0+bl+dx;n->y0=top+bt+dy;n->x1=x0+tw-br+dx;n->y1=Y-bb+dy;}
  else if(s->pos>=2){n->x0=x0+bl;n->y0=top+bt;n->x1=x0+tw-br;n->y1=Y-bb;}
- cx=ocx;cw=ocw;ca=oca;curop=oop;
+ cx=ocx;cw=ocw;ca=oca;curop=oop;curz=oz_;curz2=oz2_;curctx=octx_;
  lx=cx;LH=LA=LD=0;sp=0;lf=nc;ng=0;}

@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.10** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.11** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -54,6 +54,15 @@ under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/READ
 Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
+
+## What is new in v0.11 - forms, cookies, stacking
+
+- **Forms you can use** (`src/mwe_forms.h`): click a text field or `<textarea>` to focus it (focus ring via `:focus`), type (UTF-8, `maxlength`, `type=number` filtering, password bullets), caret movement with Left/Right/Home/End/Up/Down, Backspace/Delete, paste, Tab/Shift+Tab between fields. `<select>`: a click or Up/Down cycles the options. Checkboxes/radios as before. Values live in the DOM, so scripts read `.value`; `input`, `change`, `focus`, `blur` and `submit` events fire. Submit with Enter or a submit button: GET puts the fields in the query, POST sends a urlencoded body (the new page replaces the old one; reload re-sends nothing - it re-requests with GET).
+- **Cookies** (`browser/mb_cookie.inc`): Set-Cookie from every response and a Cookie header on every request; Domain, Path, Expires, Max-Age, Secure, HttpOnly, SameSite. `document.cookie` works (HttpOnly hidden; scripts cannot create HttpOnly cookies). Third-party cookies are accepted only with `SameSite=None; Secure`; Lax/Strict cookies are not sent on cross-site subresource requests.
+- **`z-index` / stacking**: positioned boxes (relative/absolute/fixed) are painted by z-index (negative below normal flow, auto/0 above it), with stacking contexts for nested z-indexes (two levels are compared exactly; deeper nesting is approximated). Hit-testing follows the paint order.
+- Tests: `tests/net/run.sh` is now 28 cases (forms, cookies added).
+
+**Limitations**: no text selection or clipboard copy, no IME, no `<input type=file/date/color/range>`, `<select multiple>`, no real drop-down list; the caret is a `|` character drawn inside the text (no blinking); clicking sets the caret position only for single-line fields. Cookies are not saved to disk and there is no public-suffix list. `z-index` does not support `isolation`, `opacity`/`transform` creating contexts, or more than two nested levels exactly. POST pages are not re-sendable (reload/back use GET). Not done in v0.11 (next): SVG, WebP/AVIF, `position: sticky`, `transform`, CSS animations/transitions, `await` coroutines.
 
 ## What is new in v0.10 - asynchronous loading
 
@@ -175,7 +184,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.10)
+## Supported (v0.11)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),

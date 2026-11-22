@@ -10,7 +10,7 @@ typedef struct{Cp c[4];char comb[4];int ns,spec,pe,mnw,mxw,mnh,mxh;S d;}Rule;
 static Rule rls[MR];static int nr,rdirty;
 static Cp nots[96];static int nnot;
 static int qb[4]={0,1<<30,0,1<<30};
-enum{PS_FIRST=1,PS_LAST,PS_ONLY,PS_NTH,PS_NTHL,PS_FIRSTT,PS_LASTT,PS_ONLYT,PS_NTHT,PS_EMPTY,PS_ROOT,PS_LINK,PS_CHECKED,PS_DISABLED,PS_ENABLED};
+enum{PS_FIRST=1,PS_LAST,PS_ONLY,PS_NTH,PS_NTHL,PS_FIRSTT,PS_LASTT,PS_ONLYT,PS_NTHT,PS_EMPTY,PS_ROOT,PS_LINK,PS_CHECKED,PS_DISABLED,PS_ENABLED,PS_FOCUS};
 static int nthp(S a,int*A,int*B){
  char b[32];int n=0,i=0,sg=1,v=0,dg=0,hn=0;
  for(;a.n&&n<31;a.p++,a.n--)if(!isws(*a.p))b[n++]=(char)lc(*a.p);
@@ -85,7 +85,7 @@ static int pcomp(S s,int*pi,Cp*c,int*spec,int*pe,int depth){
     else if(seq(nm,"first-of-type"))t=PS_FIRSTT;else if(seq(nm,"last-of-type"))t=PS_LASTT;else if(seq(nm,"only-of-type"))t=PS_ONLYT;
     else if(seq(nm,"empty"))t=PS_EMPTY;else if(seq(nm,"root"))t=PS_ROOT;
     else if(seq(nm,"link")||seq(nm,"any-link"))t=PS_LINK;
-    else if(seq(nm,"checked"))t=PS_CHECKED;else if(seq(nm,"disabled"))t=PS_DISABLED;else if(seq(nm,"enabled"))t=PS_ENABLED;
+    else if(seq(nm,"focus")||seq(nm,"focus-visible")||seq(nm,"focus-within"))t=PS_FOCUS;else if(seq(nm,"checked"))t=PS_CHECKED;else if(seq(nm,"disabled"))t=PS_DISABLED;else if(seq(nm,"enabled"))t=PS_ENABLED;
     else if(seq(nm,"nth-child")||seq(nm,"nth-last-child")||seq(nm,"nth-of-type")){
      if(!nthp(arg,&A,&B))return 0;
      t=seq(nm,"nth-child")?PS_NTH:seq(nm,"nth-last-child")?PS_NTHL:PS_NTHT;}
@@ -237,6 +237,7 @@ static int cp1(N*n,Cp*c){
    case PS_EMPTY:if(n->kid)return 0;break;
    case PS_ROOT:if(n->par!=root)return 0;break;
    case PS_LINK:if(!(seq(n->tag,"a")&&n->href.n))return 0;break;
+   case PS_FOCUS:if(!focn||n!=focn)return 0;break;
    case PS_CHECKED:if(!getattr(n,"checked").p)return 0;break;
    case PS_DISABLED:if(!getattr(n,"disabled").p)return 0;break;
    case PS_ENABLED:if(getattr(n,"disabled").p)return 0;break;}}

@@ -56,4 +56,14 @@ t "stylesheet over the size limit is refused" "failed=1" "file://$D/big.html" $D
 t "repeat visit is served from the cache (css, js, 2 images)" "cache-hits=4" $U/index.html $D/o.bmp 800 300 --trace --goto $U/index.html
 out=$("$D/mb" $U/fetch.html $D/o.bmp 800 300 --goto $U/fetch.html 2>&1)
 [ "$(printf '%s' "$out" | grep -c 'aborted:AbortError')" = 2 ] && { pass=$((pass+1)); echo "PASS  scripts still work on the second page of a session (v0.9 bug: stale AST arena)"; } || { fail=$((fail+1)); echo "FAIL  second scripted page"; printf '%s\n' "$out" | head -4; }
+# forms (v0.11): focus, typing, caret editing, select, checkbox, GET and POST submission
+t "form: type text (UTF-8), edit with Left, Enter submits GET" "echo GET q=hello+%ED%95%9C&c=yes&s=b" $U/form.html $D/o.bmp 700 300 --click 60 55 --type "hello 한" --press Enter
+t "form: Backspace edits at the caret" "echo GET q=ac&" $U/form.html $D/o.bmp 700 300 --click 60 55 --type "abc" --press Left --press Backspace --press Enter
+t "form: select cycles on click, submit button adds its name" "s=a&go=Go" $U/form.html $D/o.bmp 700 300 --click 60 55 --type "x" --click 230 55 --click 280 55
+t "form: POST with textarea (newline as CRLF) and urlencoded content type" "t=hi+there%0D%0A%21&u=x+y | application/x-www-form-urlencoded" $U/form.html $D/o.bmp 700 300 --click 60 100 --type " there" --press Enter --type "!" --click 400 120
+# cookies (v0.11)
+t "cookies: Set-Cookie stored and sent (Secure refused on http, bad Domain refused, HttpOnly sent)" "Cookie: sid=abc123; pref=dark; secret=hid; gone=1" $U/setck $D/o.bmp 400 200 --goto $U/ck
+t "cookies: Path restricts where a cookie is sent" "gone=1; narrow=x" $U/setck $D/o.bmp 400 200 --goto $U/only/ck
+t "cookies: Max-Age=0 deletes" "Cookie: sid=abc123; pref=dark; secret=hid" $U/setck $D/o.bmp 400 200 --goto $U/delck --goto $U/ck
+t "cookies: document.cookie hides HttpOnly, scripts can set (not HttpOnly), fetch() sends them" "fetch saw Cookie: sid=abc123; pref=dark; secret=hid; gone=1; fromjs=7" $U/setck $D/o.bmp 400 200 --goto $U/jsck.html
 echo "net tests: $pass passed, $fail failed"; [ $fail -eq 0 ]

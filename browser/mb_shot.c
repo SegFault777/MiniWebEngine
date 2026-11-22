@@ -134,6 +134,12 @@ int main(int ac,char**av){
    const char*u=av[++i];mb_key(MBK_FOCUS_URL);mb_paste(u,(int)strlen(u));mb_key(MBK_ENTER);settle(60000);}
   else if(!strcmp(av[i],"--wait")&&i+1<ac){long long e=realms()+num(av[i+1]);while(realms()<e){mb_tick();nap_(4000);}}
   else if(!strcmp(av[i],"--key")&&i+1<ac){mb_char(av[i+1][0]);}
+  else if(!strcmp(av[i],"--type")&&i+1<ac){const unsigned char*s=(const unsigned char*)av[++i];   /* type UTF-8 text */
+   while(*s){int c=*s++;if(c>=0xF0){c=(c&7)<<18|(s[0]&63)<<12|(s[1]&63)<<6|(s[2]&63);s+=3;}else if(c>=0xE0){c=(c&15)<<12|(s[0]&63)<<6|(s[1]&63);s+=2;}else if(c>=0xC0){c=(c&31)<<6|(s[0]&63);s++;}mb_char(c);}
+   settle(60000);}
+  else if(!strcmp(av[i],"--press")&&i+1<ac){const char*k=av[++i];   /* named key */
+   int c=!strcmp(k,"Enter")?MBK_ENTER:!strcmp(k,"Backspace")?MBK_BACKSPACE:!strcmp(k,"Delete")?MBK_DELETE:!strcmp(k,"Left")?MBK_LEFT:!strcmp(k,"Right")?MBK_RIGHT:!strcmp(k,"Home")?MBK_HOME:!strcmp(k,"End")?MBK_END:!strcmp(k,"Up")?MBK_UP:!strcmp(k,"Down")?MBK_DOWN:!strcmp(k,"Tab")?MBK_TAB:MBK_SHIFT_TAB;
+   mb_key(c);settle(60000);}
   else if(!strcmp(av[i],"--trace")){trace=1;}}
  if(trace)fprintf(stderr,"trace: %s maxtick=%lldms\n",mb_summary(),maxtick);
  mb_draw(px);

@@ -2,7 +2,7 @@
 /* MiniWebEngine v0.10 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.10"
+#define MWE_VERSION "0.11"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -49,6 +49,9 @@ int  mwe_js_fetch_done(int id, int status, const char *headers, const char *body
 /* `await` cannot suspend (the interpreter is a tree walker), so while a script awaits a pending Promise the engine calls
  * this: advance the network (nothing else: no navigation, no painting), store the current monotonic time in *now_ms and
  * return the number of operations still pending (0 lets the engine give up with an error instead of waiting forever). */
+/* document.cookie: get() returns the "a=1; b=2" string for the page (HttpOnly cookies left out), set(line) receives what a script
+ * assigned ("name=value; Path=/; Max-Age=60"). Without these hooks document.cookie is empty and read-only. */
+void mwe_js_set_cookies(const char *(*get)(void), void (*set)(const char *));
 typedef int  (*mwe_poll_cb)(long long *now_ms);
 void mwe_js_set_poll(mwe_poll_cb cb);
 /* Is external script i marked async? (host: fetch it at low priority, run it later with mwe_js_eval) */
@@ -80,6 +83,17 @@ int  mwe_js_active(void);                             /* nonzero while timers ar
 /* Click at a document point: fires mousedown/mouseup/click. bit0 = re-layout needed,
  * bit1 = preventDefault() was called (the host must not follow the link). */
 int  mwe_event_click(int x, int y);
+/* Form controls (v0.11): the engine keeps the focus and edits values itself. After a click, ask mwe_focus_kind(): 0 nothing
+ * focused, 1 text field, 2 textarea, 3 select -- then send typed text with mwe_input_text() and editing keys by name
+ * with mwe_input_key() ("Backspace" "Delete" "ArrowLeft" "ArrowRight" "ArrowUp" "ArrowDown" "Home" "End" "Enter" "Tab"
+ * "ShiftTab"). Both return bit 1 when the page needs a new layout (bit 8: Tab moved the focus out of the page). Call
+ * mwe_form_submit() after any click/key: it returns 1 once per submitted form with the method, the action as written
+ * in the HTML (resolve it against the page address) and the urlencoded fields. mwe_blur() removes the focus. */
+int  mwe_focus_kind(void);
+int  mwe_input_text(const char *utf8, int n);
+int  mwe_input_key(const char *key);
+void mwe_blur(void);
+int  mwe_form_submit(const char **method, const char **action, const char **data, int *dlen);
 int  mwe_event_key(const char *type, const char *key); /* "keydown"/"keyup"; same return bits */
 int  mwe_js_eval(const char *src, int len);           /* run extra script text (debug consoles/tests); 1 = page changed */
 const char *mwe_js_log(int *len);                     /* console output (UTF-8) */

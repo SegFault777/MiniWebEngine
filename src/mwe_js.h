@@ -1,5 +1,5 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.10)
+ * MiniWebEngine JavaScript subset (v0.11)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */
@@ -342,6 +342,7 @@ static JV jexv,jrv;
 static JOb*jroot2[8];
 static JOb*jmicroq,*junh,*jPromProto,*jGenProto,*jgencur;
 #define JFCB 64
+static const char*(*jcookie_get)(void);static void(*jcookie_set)(const char*);   /* document.cookie hooks (host) */
 static JV jfcb[JFCB];                 /* script callbacks of fetch()/XHR requests the host is still working on (GC roots) */
 static int jfnext;
 static int (*jpollcb)(long long*);     /* host poll while a script awaits: advances the network, returns the number of pending operations */
@@ -3409,7 +3410,7 @@ static int jdomget(JOb*o,JStr*k,JV*out){
   if(KY("activeElement")){*out=jwrapv(jn_find(root,"body"));return 1;}
   if(KY("title")){*out=ttl.n?jsv(ttl.p,ttl.n):jcv("");return 1;}
   if(KY("readyState")){*out=jcv("complete");return 1;}
-  if(KY("cookie")){*out=jcv("");return 1;}
+  if(KY("cookie")){*out=jcv(jcookie_get?jcookie_get():"");return 1;}
   if(KY("URL")||KY("documentURI")){*out=jcv(jurl);return 1;}
   if(KY("location")){*out=jobj(jLoc);return 1;}
   if(KY("defaultView")){*out=jobj(jGlob);return 1;}
@@ -3462,7 +3463,7 @@ static int jdomset(JOb*o,JStr*k,JV v){
   return 0;}
  if(o->k==OK_DOC&&o->fl==0){
   if(KY("title")){JStr*s=jtos(v);if(jthrow)return 1;ttl=jpersj(s);jdirty=1;return 1;}
-  if(KY("cookie"))return 1;
+  if(KY("cookie")){JStr*s=jtos(v);if(jthrow)return 1;if(jcookie_set&&s->len<4096){char b[4100];int i;for(i=0;i<s->len;i++)b[i]=s->d[i];b[i]=0;jcookie_set(b);}return 1;}
   return 0;}
  if(o->k==OK_DOC&&o->fl==1){
   if(KY("href")){JStr*s=jtos(v);if(jthrow)return 1;jnavto(s);return 1;}
@@ -3962,6 +3963,7 @@ int mwe_js_run(void){
 void mwe_js_set_fetch(mwe_fetch_cb cb){jfetchcb=cb;}
 void mwe_js_set_fetch_async(mwe_fetch_start_cb start,mwe_fetch_abort_cb abort){jfstart=start;jfabort=abort;}
 void mwe_js_set_poll(mwe_poll_cb cb){jpollcb=cb;}
+void mwe_js_set_cookies(const char*(*get)(void),void(*set)(const char*)){jcookie_get=get;jcookie_set=set;}
 int mwe_js_fetch_done(int id,int status,const char*hd,const char*body,int bl,const char*err,const char*url){ /* 1 = page changed */
  JV cb,rv;JOb*r;JAPI
  if(id<=0||id>=JFCB||!jfbusy[id]||!jready)return 0;
@@ -4020,6 +4022,7 @@ static N*jhit(int x,int y){
 static void jevxy(JOb*e,int x,int y){
  jsetc(e,"clientX",jnum(x));jsetc(e,"clientY",jnum(y));jsetc(e,"pageX",jnum(x));jsetc(e,"pageY",jnum(y));jsetc(e,"button",jnum(0));}
 static int jprevented(JOb*e){return jtruthy(jget(jobj(e),jcstr("defaultPrevented")));}
+static int form_click(N*t,int x);   /* mwe_forms.h */
 int mwe_event_click(int x,int y){
  N*t=jhit(x,y);int fl=0,pv=0;JAPI
  if(!t)return 0;
@@ -4034,7 +4037,7 @@ int mwe_event_click(int x,int y){
   jleave();}
  if(pv)fl|=2;
  else{
-  N*in=t;
+  N*in=t;fl|=form_click(t,x);
   while(in&&in!=root&&!(seq(in->tag,"input")))in=in->par;
   if(in&&in!=root){
    S ty=getattr(in,"type");

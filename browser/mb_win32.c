@@ -168,7 +168,7 @@ static int vk2k(WPARAM v){
   case VK_BACK:return MBK_BACKSPACE;case VK_DELETE:return MBK_DELETE;case VK_RETURN:return MBK_ENTER;
   case VK_LEFT:return MBK_LEFT;case VK_RIGHT:return MBK_RIGHT;case VK_HOME:return MBK_HOME;case VK_END:return MBK_END;
   case VK_UP:return MBK_UP;case VK_DOWN:return MBK_DOWN;case VK_PRIOR:return MBK_PGUP;case VK_NEXT:return MBK_PGDN;
-  case VK_ESCAPE:return MBK_ESC;case VK_F5:return MBK_F5;case VK_F6:return MBK_FOCUS_URL;
+  case VK_TAB:return GetKeyState(VK_SHIFT)&0x8000?MBK_SHIFT_TAB:MBK_TAB;case VK_ESCAPE:return MBK_ESC;case VK_F5:return MBK_F5;case VK_F6:return MBK_FOCUS_URL;
   case VK_BROWSER_BACK:return MBK_BACK;case VK_BROWSER_FORWARD:return MBK_FORWARD;}
  return 0;}
 static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){
