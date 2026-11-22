@@ -338,7 +338,7 @@
   if (typeof g.reportError === 'undefined') g.reportError = function (e) { console.error(e); };
   if (g.performance) { missing(g.performance, 'mark', function () { return {}; }); missing(g.performance, 'measure', function () { return {}; }); missing(g.performance, 'getEntriesByName', function () { return []; }); missing(g.performance, 'getEntriesByType', function () { return []; }); }
 
-  /* ---- fetch / Headers / Response / Request / FormData / Blob / XMLHttpRequest (synchronous host callback) ---- */
+  /* ---- fetch / Headers / Response / Request / FormData / Blob / XMLHttpRequest (asynchronous host callback, or the synchronous one in the CLI) ---- */
   class Headers {
     constructor(init) { this._m = {}; if (init) { if (init instanceof Headers) init = init._m; if (Array.isArray(init)) for (var p of init) this.append(p[0], p[1]); else for (var k of Object.keys(init)) this.append(k, init[k]); } }
     append(k, v) { k = String(k).toLowerCase(); this._m[k] = this._m[k] !== undefined ? this._m[k] + ', ' + v : String(v); }
@@ -379,19 +379,41 @@
   }
   g.Response = Response;
   g.Request = class Request { constructor(i, init) { init = init || {}; if (i instanceof g.Request) { init = Object.assign({ method: i.method, headers: i.headers, body: i.body }, init); i = i.url; } this.url = String(i); this.method = (init.method || 'GET').toUpperCase(); this.headers = new Headers(init.headers); this.body = init.body === undefined ? null : init.body; this.signal = init.signal || null; this.credentials = init.credentials || 'same-origin'; this.mode = init.mode || 'cors'; } clone() { return new g.Request(this); } };
-  function doFetch(method, url, body, headers) {
+  /* Starts a request and calls cb(result) later (result: { status, body, headers, url, error }; status 0 = network failure).
+   * Returns an id for g.__fetchAbort, or 0. With an asynchronous host (MiniBrowser) the page keeps running meanwhile. */
+  function doFetch(method, url, body, headers, cb) {
     var h = []; for (var e of new Headers(headers).entries()) h.push(e[0] + ': ' + e[1]);
-    return g.__fetch(method, url, body === undefined || body === null ? null : (body instanceof URLSearchParams ? body.toString() : typeof body === 'string' ? body : body._s !== undefined ? body._s : String(body)), h.join('\n'));
+    var b = body === undefined || body === null ? null : (body instanceof URLSearchParams ? body.toString() : typeof body === 'string' ? body : body._s !== undefined ? body._s : String(body));
+    if (g.__fetchStart) {
+      var id = g.__fetchStart(method, url, b, h.join('\n'), cb);
+      if (id > 0) return id;
+      setTimeout(function () { cb({ status: 0, error: 'the request could not be started' }); }, 0);
+      return 0;
+    }
+    var r = g.__fetch(method, url, b, h.join('\n'));
+    setTimeout(function () { cb(r); }, 0);
+    return 0;
+  }
+  function parseHeaders(r, into) {
+    String(r.headers || '').split('\n').forEach(function (l) { var i = l.indexOf(':'); if (i > 0) into[l.slice(0, i).trim().toLowerCase()] = l.slice(i + 1).trim(); });
+    if (r.contentType && !into['content-type']) into['content-type'] = r.contentType;
   }
   g.fetch = function (input, init) {
     return new Promise(function (resolve, reject) {
       var req = input instanceof g.Request ? input : new g.Request(input, init), sig = (init && init.signal) || req.signal;
       if (sig && sig.aborted) { reject(sig.reason); return; }
-      var r = doFetch(req.method, req.url, req.body, req.headers);
-      if (!r || r.status === 0) { reject(new TypeError('Failed to fetch: ' + ((r && r.error) || 'network error'))); return; }
-      var h = {}; String(r.headers || '').split('\n').forEach(function (l) { var i = l.indexOf(':'); if (i > 0) h[l.slice(0, i).trim().toLowerCase()] = l.slice(i + 1).trim(); });
-      if (r.contentType && !h['content-type']) h['content-type'] = r.contentType;
-      resolve(new Response(r.body, { status: r.status, statusText: r.statusText || '', headers: h, url: r.url || req.url }));
+      var id = 0, done = false, onabort = null;
+      id = doFetch(req.method, req.url, req.body, req.headers, function (r) {
+        if (done) return; done = true;
+        if (sig && onabort) sig.removeEventListener('abort', onabort);
+        if (!r || r.status === 0) { reject(new TypeError('Failed to fetch: ' + ((r && r.error) || 'network error'))); return; }
+        var h = {}; parseHeaders(r, h);
+        resolve(new Response(r.body, { status: r.status, statusText: r.statusText || '', headers: h, url: r.url || req.url }));
+      });
+      if (sig && !done) {
+        onabort = function () { if (done) return; done = true; if (id) g.__fetchAbort(id); reject(sig.reason); };
+        sig.addEventListener('abort', onabort);
+      }
     });
   };
   g.XMLHttpRequest = class XMLHttpRequest {
@@ -404,19 +426,28 @@
     addEventListener(t, f) { (this._ev[t] = this._ev[t] || []).push(f); }
     removeEventListener(t, f) { this._ev[t] = (this._ev[t] || []).filter(function (x) { return x !== f; }); }
     _fire(t) { var e = { type: t, target: this, loaded: this.responseText.length, total: this.responseText.length, lengthComputable: true }, h = this['on' + t]; if (typeof h === 'function') h.call(this, e); for (var f of (this._ev[t] || []).slice()) f.call(this, e); }
-    abort() { this._aborted = true; this.readyState = 0; this._fire('abort'); }
+    abort() {
+      if (this._id) g.__fetchAbort(this._id); this._id = 0; if (this._tm) clearTimeout(this._tm);
+      var was = this.readyState > 1 && this.readyState < 4 || this._sent && this.readyState < 4; this._aborted = true; this._sent = false;
+      if (was) { this.readyState = 4; this._fire('readystatechange'); this._fire('abort'); this._fire('loadend'); }
+      this.readyState = 0;
+    }
     send(body) {
-      var self = this, r = doFetch(this._m, this._u, body, this._h);
-      setTimeout(function () {
-        if (self._aborted) return;
+      var self = this; this._aborted = false; this._sent = true; this._fire('loadstart');
+      this._id = doFetch(this._m, this._u, body, this._h, function (r) {
+        if (self._aborted) return; self._sent = false; self._id = 0; if (self._tm) clearTimeout(self._tm);
         if (!r || r.status === 0) { self.readyState = 4; self._fire('readystatechange'); self._fire('error'); self._fire('loadend'); return; }
-        String(r.headers || '').split('\n').forEach(function (l) { var i = l.indexOf(':'); if (i > 0) self._rh[l.slice(0, i).trim().toLowerCase()] = l.slice(i + 1).trim(); });
-        if (r.contentType && !self._rh['content-type']) self._rh['content-type'] = r.contentType;
+        parseHeaders(r, self._rh);
         self.status = r.status; self.statusText = r.statusText || ''; self.responseText = r.body; self.responseURL = r.url || self._u;
         self.response = self.responseType === 'json' ? (function () { try { return JSON.parse(r.body); } catch (e) { return null; } })() : r.body;
         self.readyState = 2; self._fire('readystatechange'); self.readyState = 3; self._fire('readystatechange'); self._fire('progress'); self.readyState = 4; self._fire('readystatechange');
         self._fire('load'); self._fire('loadend');
-      }, 0);
+      });
+      if (this.timeout > 0) this._tm = setTimeout(function () {
+        if (self._aborted || self.readyState === 4) return; self._aborted = true; self._sent = false;
+        if (self._id) g.__fetchAbort(self._id); self._id = 0;
+        self.readyState = 4; self._fire('readystatechange'); self._fire('timeout'); self._fire('loadend');
+      }, this.timeout);
     }
   };
   g.XMLHttpRequest.UNSENT = 0; g.XMLHttpRequest.OPENED = 1; g.XMLHttpRequest.HEADERS_RECEIVED = 2; g.XMLHttpRequest.LOADING = 3; g.XMLHttpRequest.DONE = 4;

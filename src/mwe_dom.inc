@@ -4,7 +4,7 @@
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- DOM + HTML parser ---- */
 #define JMAXSCR 64
-typedef struct{N*nd;int ext;S src;}JScr;
+typedef struct{N*nd;int ext,async;S src;}JScr;
 static JScr jscr[JMAXSCR];static int jrec,jnscr;static void jrecscript(N*e);
 static N*root;static S ttl;static S sshref[16];static int nss;
 static N*nn(S tag){N*n=al(sizeof(N));n->tag=tag;return n;}

@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.9** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.10** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -54,6 +54,20 @@ under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/READ
 Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
+
+## What is new in v0.10 - asynchronous loading
+
+MiniBrowser no longer freezes while it loads. Nothing in the browser waits on the network any more:
+
+- **Request state machine** (`browser/mb_net.inc`): `QUEUED -> CONNECTING -> TLS handshake -> SENDING -> RECEIVING headers -> RECEIVING body -> COMPLETE/FAILED/CANCELLED`, advanced a little by every `mb_tick()` (10 ms budget). Sockets are non-blocking; DNS + connect run in a worker thread (`mb_plat_connect`). Up to 6 TLS connections at once (the TLS stack now keeps one context per connection).
+- **Priority queue**: page 0, stylesheets 1, scripts 3, script requests (`fetch`/XHR) 2, visible images 4, other images 5, `async` scripts 6. Identical stylesheet/script/image requests in flight are merged.
+- **Partial rendering**: the HTML is shown as soon as it arrives; stylesheets are applied in document order as they arrive; scripts run once all stylesheets and non-`async` scripts have arrived or failed; each image re-lays the page out (coalesced, at most every 30 ms). Images that are hidden or far below the fold are requested later.
+- **`fetch()` / `XMLHttpRequest` are truly asynchronous** (Promise resolved/rejected when the host reports back, microtasks run right after); `AbortController`, `xhr.abort()` and `xhr.timeout` cancel the connection. While a script `await`s a pending Promise the engine polls the network (see Limitations).
+- **Safety limits**: timeouts for connect+TLS (12 s), headers (20 s), body stall (15 s), whole request (60 s page / 45 s subresource); 5 redirects; response size limits (page 1 MB, stylesheet 256 KB, script 1 MB, image/other ~2 MB); TLS failures reported; opening a new address cancels everything still in flight; an 8 MB in-memory cache for stylesheets/scripts/images (`Cache-Control: no-store/no-cache/private` respected, default 5 min, reload clears it).
+- **Fixed (v0.9 bug)**: JavaScript failed to parse on the second scripted page of a session (the AST arena was reused without zeroing).
+- Tests: `bash tests/net/run.sh` (20 cases against a deliberately misbehaving local server) and `PORT=18443 bash browser/tests/tls_e2e.sh` (17 TLS cases, now over the non-blocking stack).
+
+**Limitations (honest list)**: `await` cannot suspend the interpreter, so a page that `await`s a network Promise is still unresponsive until that request finishes (bounded by the timeouts; the network keeps progressing meanwhile). One TLS handshake is one uninterruptible crypto step (about 0.2 s on a laptop-class CPU in the sandbox): the window can hitch once per new HTTPS host connection. Image decoding is synchronous (one image per tick). Progressive display of a half-received HTML document is not implemented. Not verified: real internet sites, the Windows build (`mb_win32.c` was rewritten for non-blocking sockets but never compiled here), macOS.
 
 ## What is new in v0.9 - towards modern websites
 
@@ -161,7 +175,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.9)
+## Supported (v0.10)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),

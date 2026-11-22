@@ -1,5 +1,5 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.9)
+ * MiniWebEngine JavaScript subset (v0.10)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */
@@ -341,6 +341,10 @@ static JV jstorev[2];
 static JV jexv,jrv;
 static JOb*jroot2[8];
 static JOb*jmicroq,*junh,*jPromProto,*jGenProto,*jgencur;
+#define JFCB 64
+static JV jfcb[JFCB];                 /* script callbacks of fetch()/XHR requests the host is still working on (GC roots) */
+static int jfnext;
+static int (*jpollcb)(long long*);     /* host poll while a script awaits: advances the network, returns the number of pending operations */
 
 /* ---- garbage collector: precise heap marking + conservative scan of the C stack ---- */
 #define JSTK 65536
@@ -397,6 +401,7 @@ static void jgc(void){
  jmarkp(jErrT);jmarkp(jErrR);jmarkp(jErrS);jmarkp(jErrF);
  for(i=0;i<8;i++)jmarkp(jroot2[i]);
  jmarkp(jmicroq);jmarkp(junh);jmarkp(jPromProto);jmarkp(jGenProto);jmarkp(jgencur);
+ for(i=0;i<JFCB;i++)jmarkv(jfcb[i]);
  for(i=0;i<jnlst;i++){jmarkp(jlst[i].type);jmarkv(jlst[i].fn);}
  for(i=0;i<jnt;i++){int k;jmarkv(jtm[i].fn);for(k=0;k<3;k++)jmarkv(jtm[i].a[k]);}
  for(i=0;i<jnw;i++)jmarkp(jwrap[i]);
@@ -455,7 +460,8 @@ static JNd*jnd(int t){
  JNd*n;unsigned i;
  jastp=(jastp+7)&~7;
  if(jastp+(int)sizeof(JNd)>JASTSZ){static JNd dm;char*p=(char*)&dm;for(i=0;i<sizeof dm;i++)p[i]=0;return&dm;}
- n=(JNd*)(jast+jastp);jastp+=(int)sizeof(JNd);n->t=(unsigned char)t;return n;}
+ n=(JNd*)(jast+jastp);jastp+=(int)sizeof(JNd);{char*z=(char*)n;for(i=0;i<sizeof(JNd);i++)z[i]=0;}   /* the arena is reused by the next page: nodes must start zeroed */
+ n->t=(unsigned char)t;return n;}
 #define JIH 512
 typedef struct JIn{JStr*s;struct JIn*nx;}JIn;
 static JIn*jih[JIH];
@@ -3918,8 +3924,8 @@ static void jrecscript(N*e){
  S sr;
  if(jnscr>=JMAXSCR||!jscript_ok(e))return;
  sr=getattr(e,"src");
- jscr[jnscr].nd=e;jscr[jnscr].ext=0;jscr[jnscr].src=(S){0,0};
- if(sr.p&&sr.n){jscr[jnscr].ext=1;jscr[jnscr].src=dec(sr);}
+ jscr[jnscr].nd=e;jscr[jnscr].ext=0;jscr[jnscr].async=0;jscr[jnscr].src=(S){0,0};
+ if(sr.p&&sr.n){jscr[jnscr].ext=1;jscr[jnscr].src=dec(sr);{S as=getattr(e,"async");jscr[jnscr].async=as.p!=0;}}
  jnscr++;}
 static void jrunsrc(const char*src,int n,const char*what){
  JNd*prog,*vn;int c;
@@ -3954,6 +3960,24 @@ int mwe_js_run(void){
  {JOb*e=jmkev("load",0);jfire(&jwinn,jcstr("load"),e,0);}
  {int d=jdirty;jleave();return d||jdirty;}}
 void mwe_js_set_fetch(mwe_fetch_cb cb){jfetchcb=cb;}
+void mwe_js_set_fetch_async(mwe_fetch_start_cb start,mwe_fetch_abort_cb abort){jfstart=start;jfabort=abort;}
+void mwe_js_set_poll(mwe_poll_cb cb){jpollcb=cb;}
+int mwe_js_fetch_done(int id,int status,const char*hd,const char*body,int bl,const char*err,const char*url){ /* 1 = page changed */
+ JV cb,rv;JOb*r;JAPI
+ if(id<=0||id>=JFCB||!jfbusy[id]||!jready)return 0;
+ cb=jfcb[id];jfbusy[id]=0;jfcb[id]=jundef();
+ if(!jlevel)jdirty=0;
+ jenter();
+ r=jnewob(OK_PLAIN,jObjProto);
+ jaddpr(r,jintc("status"),jnum(status),0);
+ jaddpr(r,jintc("body"),jstrv(bl>0?jnewstr(body,bl):&jemptys),0);
+ jaddpr(r,jintc("headers"),jstrv(jcstr(hd?hd:"")),0);
+ jaddpr(r,jintc("url"),jstrv(jcstr(url?url:"")),0);
+ if(err&&err[0])jaddpr(r,jintc("error"),jcv(err),0);
+ rv=jobj(r);
+ jcall(cb,jundef(),&rv,1);
+ if(jthrow&&!jabort)jreport();
+ {int d=jdirty;jleave();return d||jdirty;}}
 int mwe_js_eval(const char*src,int len){ /* run extra script text (tests / host consoles); 1 = page changed */
  JAPI
  if(!jready)return 0;
@@ -3962,6 +3986,10 @@ const char*mwe_script(int i,int*len){
  int k,e=0;
  for(k=0;k<jnscr;k++)if(jscr[k].ext){if(e==i){*len=jscr[k].src.n;return jscr[k].src.p;}e++;}
  *len=0;return 0;}
+int mwe_script_async(int i){
+ int k,e=0;
+ for(k=0;k<jnscr;k++)if(jscr[k].ext){if(e==i)return jscr[k].async;e++;}
+ return 0;}
 void mwe_add_js(int i,char*text,int len){if(i>=0&&i<JMAXSCR){jextp[i]=text;jextn[i]=len;}}
 void mwe_js_time(long long unix_ms,long long mono_ms){jnowunix=unix_ms;jnowmono=mono_ms;jrng^=(ju64)unix_ms*2654435761ULL;if(!jrng)jrng=1;}
 void mwe_js_url(const char*u){int i;for(i=0;u[i]&&i<(int)sizeof jurl-1;i++)jurl[i]=u[i];jurl[i]=0;}

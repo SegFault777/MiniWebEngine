@@ -46,7 +46,7 @@ open("test_roots.h", "w").write(
 PY
   )
   $CC -std=gnu11 -Os -DMWE_LIB -DMW_TLS_TEST_ROOTS="\"$D/test_roots.h\"" \
-      mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_shot.c -o "$D/mb_t" || { echo "BUILD FAILED"; exit 1; }
+      mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_shot.c -lpthread -o "$D/mb_t" || { echo "BUILD FAILED"; exit 1; }
 }
 
 run() {   # run <label> <expect: ok|refuse> <url-host> -- <s_server args...>

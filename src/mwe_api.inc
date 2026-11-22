@@ -82,6 +82,18 @@ int mwe_image_count(void){return nims;}
 const char*mwe_image_src(int i,int*len){if(i<0||i>=nims)return 0;*len=ims[i].src.n;return ims[i].src.p;}
 int mwe_image_state(int i){return i<0||i>=nims?2:ims[i].st;}
 int mwe_image_set(int i,const unsigned char*data,int len){return imset(i,data,len);}
+static int memcmp_(const char*a,const char*b,int n);
+static int imy_walk(N*n,S src){
+ N*c;int y;
+ if(n->tag.n==3&&seq(n->tag,"img")){S u=imsrcof(n);if(u.n==src.n&&memcmp_(u.p,src.p,u.n)==0)return n->y0;}
+ for(c=n->kid;c;c=c->nx){y=imy_walk(c,src);if(y>=0)return y;}
+ return -1;}
+static int memcmp_(const char*a,const char*b,int n){int i;for(i=0;i<n;i++)if(a[i]!=b[i])return 1;return 0;}
+int mwe_image_y(int i){   /* document y of the box showing image i (also while it is still loading), or -1 */
+ int k;
+ if(i<0||i>=nims)return -1;
+ for(k=0;k<nbx;k++)if(bxs[k].im==i+1||bxs[k].ibi==i+1)return bxs[k].y;
+ return root?imy_walk(root,ims[i].src):-1;}
 void mwe_image_fail(int i){if(i>=0&&i<nims)ims[i].st=2;}
 unsigned mwe_bg(void){return(unsigned)cv;}
 const char*mwe_font_name(void){return MF_NAME;}

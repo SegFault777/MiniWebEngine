@@ -62,6 +62,7 @@ static JV jpresolve(JOb *p, JV x) {
     return jundef();
 }
 
+static int jruntimers(j64 now);
 static void jreportexc(const char *what) { (void)what; jthrow = 1; jreport(); }
 
 static int jmicrostep(void) {
@@ -125,8 +126,21 @@ static JV jawait(JV v) {
     else if (v.t == JT_O) { p = jpnew(); jpresolve(p, v); if (jthrow) return jundef(); }
     else return v;
     p->fl |= JPF_HANDLED;
-    while (p->pad == 0 && !jabort) {
-        if (!jmicrostep()) {
+    {
+        long long t0 = jnowmono;
+        while (p->pad == 0 && !jabort) {
+            if (jmicrostep()) continue;
+            if (jpollcb) {   /* async host: let the network make progress (and nothing else) while this await waits */
+                long long now = jnowmono;
+                int out = jpollcb(&now);
+                jnowmono = now;
+                jruntimers(now);
+                if (p->pad != 0 || jmhead + 3 < jmicroq->na) continue;
+                if (out > 0) {
+                    if (now - t0 > 120000) return jthrowerr(jErrT, "await: gave up waiting for the network");
+                    continue;
+                }
+            }
             if (!jtimerstep()) return jthrowerr(jErrT, "await: the promise can never settle (no pending timers or tasks)");
             if (++spins > 20000) return jthrowerr(jErrT, "await: gave up waiting for a promise");
         }

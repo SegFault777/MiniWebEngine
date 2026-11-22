@@ -288,15 +288,21 @@ typedef struct {
     u32 rng_counter;
 } tls_conn_t;
 
-/* The one TLS connection and its three big buffers are plain statics in a hosted build. */
-static tls_conn_t tls_conn_s;
-#define tls_conn tls_conn_s
-static u8 tls_rx_raw_buf[MW_TLS_RAW_SIZE];
-static u8 tls_hs_buf_mem[MW_TLS_HS_SIZE];
-static u8 tls_app_recv_buf[MW_TLS_APP_SIZE];
-#define TLS_RX_RAW   tls_rx_raw_buf
-#define TLS_HS_BUF   tls_hs_buf_mem
-#define TLS_APP_RECV tls_app_recv_buf
+/* v0.10: many TLS connections can be in flight at once. Each one lives in a tls_ctx_t (state, its three
+ * big buffers and its TCP side); tls_select() points the whole stack at one of them before it is driven. */
+typedef struct {
+    tls_conn_t c;
+    u8 raw[MW_TLS_RAW_SIZE];
+    u8 hs[MW_TLS_HS_SIZE];
+    u8 app[MW_TLS_APP_SIZE];
+    tcp_conn_t tcp;
+} tls_ctx_t;
+static tls_ctx_t *tls_cur;
+#define tls_conn (tls_cur->c)
+#define TLS_RX_RAW   (tls_cur->raw)
+#define TLS_HS_BUF   (tls_cur->hs)
+#define TLS_APP_RECV (tls_cur->app)
+static inline void tls_select(tls_ctx_t *x) { tls_cur = x; tcp_cur = &x->tcp; }
 
 /* ---- random numbers: the operating system's CSPRNG, via the platform layer ----
  * Every secret this client creates (client_random, ephemeral private keys) comes straight from
@@ -1697,6 +1703,7 @@ static inline void tls_connect(u32 ip, u16 port, const char *hostname, const u8 
  * every call for simplicity -- reading RTC is cheap, and this avoids a
  * more complex "only pass it in sometimes" calling convention. */
 static inline tls_state_t tls_poll(u64 now_packed) {
+    tcp_pump();
     if (tls_conn.state == TLS_WAIT_TCP) {
         if (tcp_conn.state == TCP_ESTABLISHED) {
             tls_send_client_hello();
@@ -1761,6 +1768,7 @@ static inline void tls_close(void) {
         u8 alert[2] = { 0x01, 0x00 }; /* level=warning, description=close_notify */
         tls_write_record(TLS_CONTENT_ALERT, alert, 2);
     }
+    tcp_flush();
     tcp_close();
     tls_conn.state = TLS_CLOSED;
 }

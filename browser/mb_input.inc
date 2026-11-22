@@ -14,7 +14,7 @@ static int linkat(int x,int y,char*out){
 void mb_move(int x,int y){
  char u[UC];int h=linkat(x,y,u);
  if(h!=hov){hov=h;mb_plat_cursor(h);}
- if(h)cpy(stt,UC,u);else cpy(stt,UC,"Done");}
+ if(h)cpy(stt,UC,u);else statline(stt);}
 void mb_click(int x,int y){
  char u[UC];int chh=Ht-TB-SBH,mx,i,a,b;
  if(secpanel&&!(y<TB&&y>=8&&y<38&&x>=120&&badgew()&&x<120+10+badgew())){secpanel=0;if(y>=TB)return;}
@@ -42,12 +42,13 @@ void mb_click(int x,int y){
   if(x<Wd-SBW&&y>=TB&&y<Ht-SBH){
    jr=mwe_event_click(x,y-TB+sy);
    if(jr&1){relayout();settitle();}
-   {int l0=nloads;pump();if(nloads!=l0)return;}}
+   {int l0=navgen;pump();if(navgen!=l0)return;}}
   if(jr&2)return;
   if(hl){if(u[0]=='#')return;go(u,1);}
   else if(x<Wd-SBW&&y>=TB&&y<Ht-SBH&&mwe_click(x,y-TB+sy))relayout();}
  return;}
 void mb_wheel(int n){
+ want_sy=-1;
  int mx=ph-(Ht-TB-SBH);
  sy-=n*60;if(sy>mx)sy=mx;if(sy<0)sy=0;}
 static void ins(const char*s,int n){
@@ -80,6 +81,7 @@ void mb_paste(const char*s,int n){
  for(i=0;i<n&&o<UC-1;i++)if(s[i]!='\r'&&s[i]!='\n')b[o++]=s[i];
  ins(b,o);}
 void mb_key(int k){
+ if(k==MBK_UP||k==MBK_DOWN||k==MBK_PGUP||k==MBK_PGDN||k==MBK_HOME||k==MBK_END)want_sy=-1;
  int chh=Ht-TB-SBH,mx=ph-chh,l,i;
  if(secpanel&&k==MBK_ESC){secpanel=0;return;}
  if(k==MBK_FOCUS_URL){uf=1;usel=1;return;}

@@ -89,12 +89,17 @@ jobs:
       - name: Build and test headless MiniBrowser
         run: |
           cc -std=gnu11 -Wall -Wextra -Os -DMWE_LIB \
-             mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_shot.c -o mb_shot
+             mwe.c browser/minibrowser.c browser/mb_tls.c browser/mb_shot.c -lpthread -o mb_shot
           ./mb_shot about:home home.bmp 1000 640
           ./mb_shot "$PWD/test.html" page.bmp 1000 640
           ./mb_shot "$PWD/browser/tests/pages/ext.html" ext.bmp 900 520
           ./mb_shot "$PWD/browser/tests/pages/js_demo.html" js.bmp 800 520 --wait 300 --click 70 190 --click 70 190 --wait 100
           test -s home.bmp && test -s page.bmp && test -s ext.bmp && test -s js.bmp
+
+      - name: Asynchronous network tests (slow / hanging / redirecting local server)
+        run: |
+          python3 -m pip install --quiet pillow
+          bash tests/net/run.sh
 
       - name: Report binary sizes
         run: |

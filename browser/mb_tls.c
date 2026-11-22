@@ -1,13 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniBrowser TLS driver: runs the polled TLS 1.3 / 1.2 state machine (tls/tls.h) to completion
- * over a blocking platform socket. Certificates are always verified (chain, validity window,
- * hostname, key-exchange signature); there is no "continue anyway" path. */
+/* MiniBrowser TLS driver (v0.10): drives the polled TLS 1.3 / 1.2 state machine (tls/tls.h) one small step
+ * at a time over NON-BLOCKING platform sockets, for up to MB_NTLS connections at once. Nothing here waits.
+ * Certificates are always verified (chain, validity window, hostname, key-exchange signature); there is
+ * no "continue anyway" path. */
 #include "tls/tls.h"
 #include "mb.h"
 
-static const char *terr = "";
-static mb_tls_info_t tinfo;
-static int tnet;
+static tls_ctx_t ctxs[MB_NTLS];
+static char cused[MB_NTLS];
+static const char *cerr[MB_NTLS];
+static int cnet[MB_NTLS];
+static mb_tls_info_t cinfo[MB_NTLS];
 static void sset(char *d, int cap, const u8 *s, u32 n) { u32 i; for (i = 0; i + 1 < (u32)cap && i < n; i++) d[i] = (char)s[i]; d[i] = 0; }
 static void put(char *d, int cap, const char *s) { int i = 0; while (s[i] && i + 1 < cap) { d[i] = s[i]; i++; } d[i] = 0; }
 static const char *suite_name(u16 s) {
@@ -21,35 +24,35 @@ static const char *suite_name(u16 s) {
     default: return "unknown";
     }
 }
-static void capture_info(void) {
+static void capture_info(mb_tls_info_t *ti) {
     x509_cert_t *leaf = &tls_conn.chain[0];
     int bits, n;
-    char *k = tinfo.key;
-    tinfo.tls13 = tls_conn.tls13;
-    put(tinfo.suite, sizeof tinfo.suite, suite_name(tls_conn.cipher_suite));
-    sset(tinfo.cn, sizeof tinfo.cn, leaf->cn, leaf->cn_len);
-    tinfo.issuer[0] = 0;
-    if (tls_conn.chain_len > 1) sset(tinfo.issuer, sizeof tinfo.issuer, tls_conn.chain[1].cn, tls_conn.chain[1].cn_len);
-    tinfo.nb = (long long)leaf->not_before; tinfo.na = (long long)leaf->not_after;
-    tinfo.chain = tls_conn.chain_len;
-    if (leaf->ec_group == TLS_GROUP_SECP256R1) put(k, sizeof tinfo.key, "ECDSA P-256");
-    else if (leaf->ec_group == TLS_GROUP_SECP384R1) put(k, sizeof tinfo.key, "ECDSA P-384");
+    char *k = ti->key;
+    ti->tls13 = tls_conn.tls13;
+    put(ti->suite, sizeof ti->suite, suite_name(tls_conn.cipher_suite));
+    sset(ti->cn, sizeof ti->cn, leaf->cn, leaf->cn_len);
+    ti->issuer[0] = 0;
+    if (tls_conn.chain_len > 1) sset(ti->issuer, sizeof ti->issuer, tls_conn.chain[1].cn, tls_conn.chain[1].cn_len);
+    ti->nb = (long long)leaf->not_before; ti->na = (long long)leaf->not_after;
+    ti->chain = tls_conn.chain_len;
+    if (leaf->ec_group == TLS_GROUP_SECP256R1) put(k, sizeof ti->key, "ECDSA P-256");
+    else if (leaf->ec_group == TLS_GROUP_SECP384R1) put(k, sizeof ti->key, "ECDSA P-384");
     else if (leaf->pubkey_valid) {
         bits = (int)bn_bit_length(&leaf->pubkey_modulus);
-        put(k, sizeof tinfo.key, "RSA ");
+        put(k, sizeof ti->key, "RSA ");
         n = 4; if (bits >= 1000) k[n++] = (char)('0' + bits / 1000 % 10);
         k[n++] = (char)('0' + bits / 100 % 10); k[n++] = (char)('0' + bits / 10 % 10); k[n++] = (char)('0' + bits % 10);
-        put(k + n, (int)sizeof tinfo.key - n, "-bit");
-    } else put(k, sizeof tinfo.key, "unknown");
+        put(k + n, (int)sizeof ti->key - n, "-bit");
+    } else put(k, sizeof ti->key, "unknown");
 }
-const mb_tls_info_t *mb_tls_info(void) { return &tinfo; }
+const mb_tls_info_t *mb_tls_info(int c) { return &cinfo[c]; }
 int mb_root_count(void) { return TRUSTED_ROOT_COUNT; }
 const char *mb_root_name(int i, int *legacy, const char **sha) {
     if (i < 0 || i >= TRUSTED_ROOT_COUNT) { *legacy = 0; *sha = ""; return ""; }
     *legacy = trusted_root_legacy[i]; *sha = trusted_root_sha256[i];
     return trusted_root_names[i];
 }
-int mb_tls_net_failed(void) { return tnet; }
+int mb_tls_net_failed(int c) { return cnet[c]; }
 
 /* civil date from days since 1970-01-01 (proleptic Gregorian) */
 static u64 now_packed(void) {
@@ -94,43 +97,59 @@ static const char *why(void) {
     default: return "The TLS handshake failed.";
     }
 }
-const char *mb_tls_error(void) { return terr; }
+const char *mb_tls_error(int c) { return cerr[c]; }
 
-int mb_tls_open(const char *host, int port) {
+int mb_tls_begin(const char *host, int port) {
     u8 seed[16] = {0};
-    tls_state_t st;
+    int c;
+    for (c = 0; c < MB_NTLS && cused[c]; c++) {}
+    if (c == MB_NTLS) return -1;
+    cused[c] = 1; cerr[c] = ""; cnet[c] = 0;
+    tls_select(&ctxs[c]);
     tcp_host = host;
-    tnet = 0;
     tls_connect(0, (u16)port, host, seed);
-    for (;;) {
-        st = tls_poll(now_packed());
-        if (st == TLS_ESTABLISHED) { capture_info(); return 0; }
-        if (st == TLS_FAILED) { terr = why(); tnet = tls_conn.fail_reason == TLS_FAIL_TCP; tcp_close(); return -1; }
-        if (tcp_conn.state == TCP_CLOSED) {
-            tnet = 1;
-            terr = st == TLS_WAIT_TCP || tcp_h < 0 ? "Could not connect to the server." : "The connection closed during the TLS handshake (or timed out).";
-            tcp_close(); return -1;
+    return c;
+}
+/* 1 = established and verified, 0 = keep polling, -1 = failed (mb_tls_error / mb_tls_net_failed say why) */
+int mb_tls_step(int c) {
+    tls_state_t st;
+    tls_select(&ctxs[c]);
+    st = tls_poll(now_packed());
+    if (st == TLS_ESTABLISHED) { capture_info(&cinfo[c]); return 1; }
+    if (st == TLS_FAILED) { cerr[c] = why(); cnet[c] = tls_conn.fail_reason == TLS_FAIL_TCP; return -1; }
+    if (tcp_conn.state == TCP_CLOSED) {
+        cnet[c] = 1;
+        cerr[c] = st == TLS_WAIT_TCP || tcp_conn.h < 0 ? "Could not connect to the server." : "The connection closed during the TLS handshake (or timed out).";
+        return -1;
+    }
+    return 0;
+}
+/* queues one request (encrypted) for sending; 1 ok, 0 failed (too large for the send queue, or closed) */
+int mb_tls_write(int c, const void *buf, int n) {
+    tls_select(&ctxs[c]);
+    return tls_send_app_data((const u8 *)buf, (u32)n);
+}
+/* >0 bytes; 0 nothing yet; -1 error; -2 the server closed the connection (end of data) */
+int mb_tls_read(int c, void *buf, int cap) {
+    u32 r0;
+    tls_select(&ctxs[c]);
+    tcp_pump();
+    if (!tls_conn.app_recv_len) {
+        if (tls_conn.state == TLS_FAILED) { cerr[c] = why(); return -1; }
+        r0 = tls_conn.rx_raw_len;
+        if (r0 >= 5 && r0 >= 5u + (((u32)TLS_RX_RAW[3] << 8) | TLS_RX_RAW[4])) tls_process_raw_buffer(now_packed());   /* a whole record is already buffered */
+        if (!tls_conn.app_recv_len && tls_conn.state != TLS_FAILED) tls_poll(now_packed());
+        if (!tls_conn.app_recv_len) {
+            if (tls_conn.state == TLS_FAILED) { cerr[c] = why(); return -1; }
+            if (tls_conn.peer_close_notify || tcp_conn.state == TCP_CLOSED) return -2;
+            return 0;
         }
     }
+    return tls_poll_recv_app_data((u8 *)buf, (u16)(cap > 65535 ? 65535 : cap));
 }
-int mb_tls_send(const void *buf, int n) { return tls_send_app_data((const u8 *)buf, (u32)n); }
-int mb_tls_recv(void *buf, int cap) {
-    u32 r0, a0, h0;
-    tls_state_t s0;
-    for (;;) {
-        if (tls_conn.app_recv_len) return tls_poll_recv_app_data((u8 *)buf, (u16)(cap > 65535 ? 65535 : cap));
-        if (tls_conn.state == TLS_FAILED) { terr = why(); return -1; }
-        if (tls_conn.peer_close_notify || tcp_conn.state == TCP_CLOSED) {
-            if (tls_conn.rx_raw_len < 5) return 0;   /* nothing left to decode */
-        }
-        r0 = tls_conn.rx_raw_len; a0 = tls_conn.app_recv_len; h0 = tls_conn.hs_buf_len; s0 = tls_conn.state;
-        /* a whole record may already be buffered: decode it before blocking on the socket again */
-        if (r0 >= 5 && r0 >= 5u + (((u32)TLS_RX_RAW[3] << 8) | TLS_RX_RAW[4])) {
-            tls_process_raw_buffer(now_packed());
-            if (tls_conn.rx_raw_len != r0 || tls_conn.app_recv_len != a0 || tls_conn.hs_buf_len != h0 || tls_conn.state != s0) continue;
-        }
-        if (tcp_conn.state == TCP_CLOSED) return 0;
-        tls_poll(now_packed());
-    }
+void mb_tls_end(int c) {
+    if (c < 0 || c >= MB_NTLS || !cused[c]) return;
+    tls_select(&ctxs[c]);
+    tls_close();
+    cused[c] = 0;
 }
-void mb_tls_close(void) { tls_close(); }

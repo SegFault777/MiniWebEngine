@@ -51,7 +51,7 @@ and roots that are not in `tls/trusted_roots.h` (update that file to add or reti
 ## Not supported (yet)
 
 Images, text input in forms (controls are drawn but not editable), `fetch` / `XMLHttpRequest`, cookies, `#fragment` scrolling, non-Latin text, DPI scaling.
-Pages load synchronously, so the window is unresponsive while a request is in flight. Scripts run to completion
+Pages and resources load asynchronously (see `mb_net.inc`; the window stays responsive, except while a script `await`s the network or during a TLS handshake). Scripts run to completion
 (a step budget aborts runaway loops), so a heavy script also blocks the window.
 
 ## Layout

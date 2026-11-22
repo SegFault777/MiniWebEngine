@@ -48,8 +48,7 @@ void mb_plat_log(const char *s, int n){
 void mb_plat_cursor(int h){
  hand=h;
  SetCursor(LoadCursor(NULL,h?IDC_HAND:IDC_ARROW));}
-#define MAXS 8
-static SOCKET sk[MAXS];
+#define MAXS 64
 /* RtlGenRandom: the system CSPRNG, exported by advapi32 under this name */
 BOOLEAN WINAPI SystemFunction036(PVOID buf, ULONG len);
 
@@ -61,45 +60,79 @@ long long mb_plat_time(void){
  GetSystemTimeAsFileTime(&ft);
  u.LowPart=ft.dwLowDateTime;u.HighPart=ft.dwHighDateTime;
  return (long long)(u.QuadPart/10000000ULL)-11644473600LL;}
-int mb_plat_open(const char *host, int port){
- struct addrinfo hints,*res=NULL,*ai;
- char ps[16],tmp[8];
- SOCKET s=INVALID_SOCKET;
- int r,k,tm=15000,pl=0,slot;
- for(slot=0;slot<MAXS&&sk[slot]!=0&&sk[slot]!=INVALID_SOCKET;slot++);
- if(slot==MAXS)return -1;
- if(port<=0||port>65535)port=80;
- k=port;
- do{tmp[pl++]=(char)('0'+k%10);k/=10;}while(k);
- for(r=0;r<pl;r++)ps[r]=tmp[pl-1-r];
- ps[pl]=0;
+/* Non-blocking sockets (v0.10). Name resolution and connect() run in a worker thread per connection; afterwards the
+ * socket is switched to non-blocking mode and polled by the core. NOTE: this file could not be compiled or run in the
+ * environment v0.10 was developed in (no Windows toolchain) - treat it as unverified and report build errors. */
+typedef struct { volatile LONG st; SOCKET fd; int port; char host[256]; } Sk;   /* st: 0 free, 1 connecting, 2 connected, 3 failed, 4 closed while connecting */
+static Sk sk2[MAXS];
+static CRITICAL_SECTION skcs;
+static volatile LONG skinit;
+static void skinit_once(void){ if(InterlockedCompareExchange(&skinit,1,0)==0) InitializeCriticalSection(&skcs); }
+static DWORD WINAPI skwork(LPVOID a){
+ Sk *s=(Sk*)a;struct addrinfo hints,*res=NULL,*ai;char ps[16];SOCKET fd=INVALID_SOCKET;
+ wsprintfA(ps,"%d",s->port);
  ZeroMemory(&hints,sizeof hints);
  hints.ai_family=AF_UNSPEC;hints.ai_socktype=SOCK_STREAM;hints.ai_protocol=IPPROTO_TCP;
- if(getaddrinfo(host,ps,&hints,&res)!=0)return -1;
- for(ai=res;ai;ai=ai->ai_next){
-  s=socket(ai->ai_family,ai->ai_socktype,ai->ai_protocol);
-  if(s==INVALID_SOCKET)continue;
-  setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,(const char*)&tm,sizeof tm);
-  setsockopt(s,SOL_SOCKET,SO_SNDTIMEO,(const char*)&tm,sizeof tm);
-  if(connect(s,ai->ai_addr,(int)ai->ai_addrlen)==0)break;
-  closesocket(s);s=INVALID_SOCKET;}
- freeaddrinfo(res);
- if(s==INVALID_SOCKET)return -1;
- sk[slot]=s;
- return slot;}
+ if(getaddrinfo(s->host,ps,&hints,&res)==0){
+  for(ai=res;ai;ai=ai->ai_next){
+   u_long nb=1;fd_set w,e;struct timeval tv;int r;
+   fd=socket(ai->ai_family,ai->ai_socktype,ai->ai_protocol);
+   if(fd==INVALID_SOCKET)continue;
+   ioctlsocket(fd,FIONBIO,&nb);
+   r=connect(fd,ai->ai_addr,(int)ai->ai_addrlen);
+   if(r==0)break;
+   if(WSAGetLastError()==WSAEWOULDBLOCK){
+    FD_ZERO(&w);FD_ZERO(&e);FD_SET(fd,&w);FD_SET(fd,&e);tv.tv_sec=8;tv.tv_usec=0;
+    if(select(0,NULL,&w,&e,&tv)>0&&FD_ISSET(fd,&w))break;}
+   closesocket(fd);fd=INVALID_SOCKET;}
+  freeaddrinfo(res);}
+ EnterCriticalSection(&skcs);
+ if(s->st==4){if(fd!=INVALID_SOCKET)closesocket(fd);s->st=0;}
+ else if(fd!=INVALID_SOCKET){s->fd=fd;s->st=2;}
+ else s->st=3;
+ LeaveCriticalSection(&skcs);
+ return 0;}
+int mb_plat_connect(const char *host, int port){
+ int i,n=0;HANDLE t;
+ skinit_once();
+ while(host[n])n++;
+ if(n>=(int)sizeof sk2[0].host||port<=0||port>65535)return -1;
+ EnterCriticalSection(&skcs);
+ for(i=0;i<MAXS&&sk2[i].st;i++);
+ if(i==MAXS){LeaveCriticalSection(&skcs);return -1;}
+ sk2[i].st=1;sk2[i].fd=INVALID_SOCKET;sk2[i].port=port;
+ for(n=0;host[n];n++)sk2[i].host[n]=host[n];
+ sk2[i].host[n]=0;
+ LeaveCriticalSection(&skcs);
+ t=CreateThread(NULL,0,skwork,&sk2[i],0,NULL);
+ if(!t){sk2[i].st=0;return -1;}
+ CloseHandle(t);
+ return i;}
+int mb_plat_connect_poll(int h){
+ int r;
+ if(h<0||h>=MAXS)return -1;
+ EnterCriticalSection(&skcs);r=sk2[h].st==2?1:sk2[h].st==1?0:-1;LeaveCriticalSection(&skcs);
+ return r;}
 int mb_plat_send(int h, const void *b, int n){
  int k;
- if(h<0||h>=MAXS||sk[h]==INVALID_SOCKET||sk[h]==0)return -1;
- k=send(sk[h],(const char*)b,n,0);
- return k==SOCKET_ERROR?-1:k;}
+ if(h<0||h>=MAXS||sk2[h].st!=2)return -1;
+ k=send(sk2[h].fd,(const char*)b,n,0);
+ if(k==SOCKET_ERROR)return WSAGetLastError()==WSAEWOULDBLOCK?0:-1;
+ return k;}
 int mb_plat_recv(int h, void *b, int n){
  int k;
- if(h<0||h>=MAXS||sk[h]==INVALID_SOCKET||sk[h]==0)return -1;
- k=recv(sk[h],(char*)b,n,0);
- return k==SOCKET_ERROR?-1:k;}
+ if(h<0||h>=MAXS||sk2[h].st!=2)return -1;
+ k=recv(sk2[h].fd,(char*)b,n,0);
+ if(k==SOCKET_ERROR)return WSAGetLastError()==WSAEWOULDBLOCK?-2:-1;
+ return k;}
 void mb_plat_close(int h){
- if(h<0||h>=MAXS||sk[h]==INVALID_SOCKET||sk[h]==0)return;
- closesocket(sk[h]);sk[h]=INVALID_SOCKET;}
+ if(h<0||h>=MAXS)return;
+ skinit_once();
+ EnterCriticalSection(&skcs);
+ if(sk2[h].st==1)sk2[h].st=4;
+ else if(sk2[h].st==2||sk2[h].st==3){if(sk2[h].fd!=INVALID_SOCKET)closesocket(sk2[h].fd);sk2[h].fd=INVALID_SOCKET;sk2[h].st=0;}
+ LeaveCriticalSection(&skcs);}
+void mb_plat_idle(int ms){Sleep((DWORD)ms);}
 
 /* ---- window ---- */
 static void mkdib(int w,int h){

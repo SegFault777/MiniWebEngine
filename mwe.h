@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.9 public API (build mwe.c with -DMWE_LIB to embed it). */
+/* MiniWebEngine v0.10 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.9"
+#define MWE_VERSION "0.10"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -37,6 +37,24 @@ void mwe_image_fail(int i);
 typedef int (*mwe_fetch_cb)(const char *method, const char *url, const char *body, int blen, const char *reqheaders,
                             char *out, int cap, int *status, char *rh, int rhcap);
 void mwe_js_set_fetch(mwe_fetch_cb cb);
+/* Asynchronous network access (v0.10; when set, fetch()/XMLHttpRequest use it instead of the synchronous callback).
+ * start() is called with a request id and must return at once (0 = started, <0 = cannot start); the host reports the
+ * result later with mwe_js_fetch_done(), from any point where no script is running or from inside the poll callback.
+ * That resolves/rejects the script's Promise (or fires the XHR events); microtasks run right after. abort() is called when a
+ * script cancels the request (AbortController, xhr.abort(), timeout) - the host should stop it and not report back. */
+typedef int  (*mwe_fetch_start_cb)(int id, const char *method, const char *url, const char *body, int blen, const char *reqheaders);
+typedef void (*mwe_fetch_abort_cb)(int id);
+void mwe_js_set_fetch_async(mwe_fetch_start_cb start, mwe_fetch_abort_cb abort);
+int  mwe_js_fetch_done(int id, int status, const char *headers, const char *body, int blen, const char *error, const char *url);   /* 1 = page changed */
+/* `await` cannot suspend (the interpreter is a tree walker), so while a script awaits a pending Promise the engine calls
+ * this: advance the network (nothing else: no navigation, no painting), store the current monotonic time in *now_ms and
+ * return the number of operations still pending (0 lets the engine give up with an error instead of waiting forever). */
+typedef int  (*mwe_poll_cb)(long long *now_ms);
+void mwe_js_set_poll(mwe_poll_cb cb);
+/* Is external script i marked async? (host: fetch it at low priority, run it later with mwe_js_eval) */
+int  mwe_script_async(int i);
+/* Document y of the top of the first box that shows image i, or -1 (not laid out yet). */
+int  mwe_image_y(int i);
 unsigned    mwe_bg(void);
 const char *mwe_font_name(void);
 /* Copyright and licence notices of the engine and the embedded fonts (UTF-8, static string). */
