@@ -33,7 +33,8 @@ static void fr(int x,int y,int w,int h,int c){
 #define MS 800
 typedef struct{short g,fs,ox,oy;u8 b,w,h,used;int off;}GC;
 static GC gc[2048];
-static u8 pool[1<<21];
+#define POOLSZ (1<<21)
+static u8*pool;
 static int pp;
 static float acc[65536],sg[MS][6];
 static u8 sgq[MS];
@@ -103,7 +104,8 @@ static GC*glyph(int g,int fs,int tf){
   else{if(cx!=sx||cy!=sy)sadd(0,cx*k+cy*k*sk,-cy*k,sx*k+sy*k*sk,-sy*k,0,0);cx=sx;cy=sy;}}
  w=h=0;ox=oy=0;
  if(nsg){ox=fl_(mnx);oy=fl_(mny);w=ce(mxx)-ox;h=ce(mxy)-oy;if(w<=0||h<=0||w>250||h>250)w=h=0;}
- if(pp+w*h>(int)sizeof pool){for(i=0;i<2048;i++)gc[i].used=0;pp=0;}
+ if(w&&!pool&&!(pool=(u8*)mem_get(POOLSZ)))w=h=0;   /* glyph bitmaps: lent on first use; without memory glyphs stay blank */
+ if(pp+w*h>POOLSZ){for(i=0;i<2048;i++)gc[i].used=0;pp=0;}
  e->used=1;e->g=g;e->fs=fs;e->b=tf;e->w=w;e->h=h;e->ox=ox;e->oy=oy;e->off=pp;
  if(!w)return e;
  for(i=0;i<(w+2)*h;i++)acc[i]=0;

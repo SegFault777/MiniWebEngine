@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* MiniWebEngine v0.11
+/* MiniWebEngine v0.12
  * Zero-dependency mini HTML5 + CSS3 engine: HTML parse -> selectors/cascade (@media, var(),
  * calc()) -> block / inline / flex / grid / table layout -> anti-aliased vector-font
  * rasterizer (outlines embedded as compact data, see tools/genfont.py) -> pixels.
  *
  * The engine itself calls no libc function (static arena, own string code).
- * Only the optional CLI (default build) uses stdio: fopen fread fwrite fclose.
+ * No C library: the engine needs none (verify: tests/nolibc.sh). The optional CLI can be built without one too (-DMWE_NOLIBC, Linux x86-64).
  *
  * CLI build : cc -Os mwe.c -o mwe              usage: mwe in.html out.bmp [width]
  * Lib build : cc -Os -DMWE_LIB -c mwe.c        API in mwe.h (used by browser/)

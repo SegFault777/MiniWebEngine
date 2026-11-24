@@ -28,10 +28,11 @@ static const char HOME[]=
 "Pages and their resources load in the background (several at a time); pages that need `await` on the network still pause while they wait.</p>"
 "<p><a href=\"about:blank\">about:blank</a> &middot; <a href=\"about:roots\">about:roots</a> &middot; <a href=\"about:licenses\">about:licenses</a> (copyright notices)</p></body></html>";
 static int rdfiled(const char*url,char*dst,int cap,int*olen,int page){
- char p[UC];FILE*f;int n;
+ char p[UC];int n;
  fpath(url,p,sizeof p);
- if(!(f=fopen(p,"rb"))){if(page)errpage("File not found","The file could not be opened.",url);return 0;}
- n=(int)fread(dst,1,(size_t)cap-1,f);fclose(f);*olen=n;dst[n]=0;return 1;}
+ n=mb_plat_readfile(p,dst,cap-1);
+ if(n<0){if(page)errpage("File not found","The file could not be opened.",url);return 0;}
+ *olen=n;dst[n]=0;return 1;}
 static int hdr(const char*h,int hl,const char*name,char*out,int cap){
  int i=0,n=len(name),o;
  while(i<hl){

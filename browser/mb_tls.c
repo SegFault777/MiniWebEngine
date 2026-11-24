@@ -6,7 +6,7 @@
 #include "tls/tls.h"
 #include "mb.h"
 
-static tls_ctx_t ctxs[MB_NTLS];
+static tls_ctx_t *ctxs[MB_NTLS];   /* ~230 KB each, lent while the connection lives */
 static char cused[MB_NTLS];
 static const char *cerr[MB_NTLS];
 static int cnet[MB_NTLS];
@@ -104,8 +104,10 @@ int mb_tls_begin(const char *host, int port) {
     int c;
     for (c = 0; c < MB_NTLS && cused[c]; c++) {}
     if (c == MB_NTLS) return -1;
+    ctxs[c] = (tls_ctx_t *)mb_plat_alloc(sizeof(tls_ctx_t));
+    if (!ctxs[c]) return -1;
     cused[c] = 1; cerr[c] = ""; cnet[c] = 0;
-    tls_select(&ctxs[c]);
+    tls_select(ctxs[c]);
     tcp_host = host;
     tls_connect(0, (u16)port, host, seed);
     return c;
@@ -113,7 +115,7 @@ int mb_tls_begin(const char *host, int port) {
 /* 1 = established and verified, 0 = keep polling, -1 = failed (mb_tls_error / mb_tls_net_failed say why) */
 int mb_tls_step(int c) {
     tls_state_t st;
-    tls_select(&ctxs[c]);
+    tls_select(ctxs[c]);
     st = tls_poll(now_packed());
     if (st == TLS_ESTABLISHED) { capture_info(&cinfo[c]); return 1; }
     if (st == TLS_FAILED) { cerr[c] = why(); cnet[c] = tls_conn.fail_reason == TLS_FAIL_TCP; return -1; }
@@ -126,13 +128,13 @@ int mb_tls_step(int c) {
 }
 /* queues one request (encrypted) for sending; 1 ok, 0 failed (too large for the send queue, or closed) */
 int mb_tls_write(int c, const void *buf, int n) {
-    tls_select(&ctxs[c]);
+    tls_select(ctxs[c]);
     return tls_send_app_data((const u8 *)buf, (u32)n);
 }
 /* >0 bytes; 0 nothing yet; -1 error; -2 the server closed the connection (end of data) */
 int mb_tls_read(int c, void *buf, int cap) {
     u32 r0;
-    tls_select(&ctxs[c]);
+    tls_select(ctxs[c]);
     tcp_pump();
     if (!tls_conn.app_recv_len) {
         if (tls_conn.state == TLS_FAILED) { cerr[c] = why(); return -1; }
@@ -149,7 +151,8 @@ int mb_tls_read(int c, void *buf, int cap) {
 }
 void mb_tls_end(int c) {
     if (c < 0 || c >= MB_NTLS || !cused[c]) return;
-    tls_select(&ctxs[c]);
+    tls_select(ctxs[c]);
     tls_close();
     cused[c] = 0;
+    mb_plat_free(ctxs[c]); ctxs[c] = 0;
 }

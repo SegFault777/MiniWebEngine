@@ -43,14 +43,14 @@ typedef struct{
  int st,failed,nw,redir,port,tls,h,ctx,status,netfail,upgrade,clen,chunked,cpos,he,n,sent,rl,bl,nocache,ttl,haveti,prio;
  Wt w[4];
  char m[8],url[UC],host[256],fb[UC],err[200],head[80],xh[2048];
- int pbl;char*bp;
+ int pbl,cap;char*bp,*buf;
  long long t0,tst,tlast;
  mb_tls_info_t ti;
 }Rq;
 static Rq rqs[NRQ];
 static Qe qs[NQ];
 static int qseq,nstarted_,ncancel_,ndone_,nfail_,nredir_,ncache_;
-static char rbuf[NRQ][RBUF],rqt[NRQ][RQMAX],pbod[NRQ][RBODY];
+static char rqt[NRQ][RQMAX],pbod[NRQ][RBODY];   /* response buffers are lent per request and grow on demand (Rq.buf) */
 static char qbp[1<<16];static int qbn;
 static int imgbudget;
 
@@ -63,20 +63,23 @@ static void* mcopy(void*d,const void*s,int n){char*a=(char*)d;const char*b=(cons
 /* ---- cache: successful GET responses of stylesheets, scripts and images (not pages, not script requests) ---- */
 #define CE 160
 typedef struct{unsigned h;int off,ul,bl;long long exp;}Ce;
-static Ce ce[CE];static int nce,cpn;static char cpool[1<<23];
+#define CPOOLSZ (1<<23)
+static Ce ce[CE];static int nce,cpn;static char*cpool;   /* cpool: 8 MB, lent on the first cache_put */
 static unsigned hash32(const char*s){unsigned h=2166136261u;while(*s){h^=(unsigned char)*s++;h*=16777619u;}return h;}
 static void cache_flush(void){nce=0;cpn=0;}
-static int cache_get(const char*url,char*dst,int cap,int*bl){
+static const char*cache_get(const char*url,int*bl){   /* body of a fresh entry (valid until the next cache_put), or 0 */
  unsigned h=hash32(url);int i,ul=len(url)+1;long long now=mb_plat_ms();
+ if(!cpool)return 0;
  for(i=0;i<nce;i++){
   if(ce[i].h!=h||ce[i].ul!=ul||!memeq(cpool+ce[i].off,url,ul))continue;
-  if(ce[i].exp<now||ce[i].bl>=cap)return 0;
-  mcopy(dst,cpool+ce[i].off+ul,ce[i].bl);dst[ce[i].bl]=0;*bl=ce[i].bl;return 1;}
+  if(ce[i].exp<now)return 0;
+  *bl=ce[i].bl;return cpool+ce[i].off+ul;}
  return 0;}
 static void cache_put(const char*url,const char*b,int bl,int ttl){
  int ul=len(url)+1;
  if(bl>(1<<20)||ttl<=0)return;
- if(cpn+ul+bl>(int)sizeof cpool||nce>=CE)cache_flush();
+ if(!cpool&&!(cpool=(char*)mb_plat_alloc(CPOOLSZ)))return;
+ if(cpn+ul+bl>CPOOLSZ||nce>=CE)cache_flush();
  ce[nce].h=hash32(url);ce[nce].off=cpn;ce[nce].ul=ul;ce[nce].bl=bl;ce[nce].exp=mb_plat_ms()+(long long)ttl*1000;
  mcopy(cpool+cpn,url,ul);mcopy(cpool+cpn+ul,b,bl);cpn+=ul+bl;nce++;}
 
@@ -84,7 +87,14 @@ static void cache_put(const char*url,const char*b,int bl,int ttl){
 static void rq_close(Rq*r){
  if(r->tls){if(r->ctx>=0)mb_tls_end(r->ctx);r->ctx=-1;}
  else if(r->h>=0){mb_plat_close(r->h);r->h=-1;}}
-static void rq_free(Rq*r){rq_close(r);r->st=RS_FREE;r->nw=0;}
+static void rq_free(Rq*r){rq_close(r);if(r->buf)mb_plat_free(r->buf);r->buf=0;r->cap=0;r->st=RS_FREE;r->nw=0;}
+static int rq_reserve(Rq*r,int want){   /* make the response buffer at least `want` bytes (+1 for a terminating NUL), keeping its contents */
+ char*nb;int i;
+ if(r->cap>=want&&r->buf)return 1;
+ nb=(char*)mb_plat_alloc((unsigned long)want+1);
+ if(!nb)return 0;
+ if(r->buf){for(i=0;i<r->n;i++)nb[i]=r->buf[i];mb_plat_free(r->buf);}
+ r->buf=nb;r->cap=want;return 1;}
 static void rq_fail(Rq*r,const char*head,const char*msg){
  cpy(r->head,sizeof r->head,head);cpy(r->err,sizeof r->err,msg);
  rq_close(r);r->failed=1;r->st=RS_COMPLETE;nfail_++;}
@@ -136,11 +146,12 @@ static void rq_begin(Rq*r){
  int si=(int)(r-rqs),i,port;const char*p;
  r->he=r->n=r->sent=r->cpos=r->bl=r->haveti=0;r->clen=-1;r->chunked=0;r->status=0;r->netfail=0;r->h=-1;r->ctx=-1;r->failed=0;
  r->tst=r->tlast=mb_plat_ms();
+ if(!rq_reserve(r,65536)){rq_fail(r,"Out of memory","Not enough memory to load this.");return;}
  hsts_upgrade(r->url);
  if(has(r->url,"file:")){
   int l=0;r->tls=0;
-  if(!rdfiled(r->url,rbuf[si],RBUF,&l,0)){rq_fail(r,"File not found","The file could not be opened.");return;}
-  r->bp=rbuf[si];r->bl=l;r->status=200;r->st=RS_COMPLETE;return;}
+  if(!rq_reserve(r,capof(r->w[0].kind)+4096)||!rdfiled(r->url,r->buf,r->cap,&l,0)){rq_fail(r,"File not found","The file could not be opened.");return;}
+  r->bp=r->buf;r->bl=l;r->status=200;r->st=RS_COMPLETE;return;}
  if(!has(r->url,"http")){rq_fail(r,"Unsupported address","This address type is not supported.");return;}
  if(r->w[0].kind!=K_PAGE&&sec==2&&!has(r->url,"https://")){rq_fail(r,"Blocked","blocked as mixed content (an https page may not load http resources)");return;}
  r->tls=has(r->url,"https://");
@@ -152,7 +163,8 @@ static void rq_begin(Rq*r){
  r->port=port;
  /* cached stylesheets / scripts / images are served from memory */
  if(r->w[0].kind!=K_PAGE&&r->w[0].kind!=K_FETCH&&!cmpi(r->m,"GET")){
-  if(cache_get(r->url,rbuf[si],RBUF,&i)){r->bp=rbuf[si];r->bl=i;r->status=200;r->st=RS_COMPLETE;ncache_++;return;}}
+  {const char*cb=cache_get(r->url,&i);
+   if(cb&&rq_reserve(r,i)){mcopy(r->buf,cb,i);r->buf[i]=0;r->bp=r->buf;r->bl=i;r->status=200;r->st=RS_COMPLETE;ncache_++;return;}}}
  if(!rq_build(r,si)){rq_fail(r,"Request too large","The request is too large for this browser.");return;}
  if(r->tls){
   r->ctx=mb_tls_begin(r->host,port);
@@ -178,13 +190,13 @@ static int chunk_scan(const char*b,int n,int*pos){   /* walk complete chunks fro
   if(j+sz+2>n)return 0;
   i=j+sz+2;*pos=i;}}
 static int body_done(Rq*r){
- int si=(int)(r-rqs),bl=r->n-r->he-4;
- if(r->chunked)return chunk_scan(rbuf[si]+r->he+4,bl,&r->cpos);
+ int bl=r->n-r->he-4;
+ if(r->chunked)return chunk_scan(r->buf+r->he+4,bl,&r->cpos);
  return r->clen>=0&&bl>=r->clen;}
 static void rq_restart(Rq*r){rq_close(r);rq_begin(r);}
 /* headers are complete. 0 = keep reading, 1 = response complete, 2 = restarted (redirect), -1 = failed */
 static int rq_headers(Rq*r){
- int si=(int)(r-rqs),i,st=0,hl=r->he+2,kind=r->w[0].kind;char*b=rbuf[si];char tc[256],loc[UC],tmp2[UC];
+ int i,st=0,hl=r->he+2,kind=r->w[0].kind;char*b=r->buf;char tc[256],loc[UC],tmp2[UC];
  b[r->n]=0;
  if(!has(b,"HTTP/")){rq_fail(r,"Bad response","The server sent something that is not HTTP.");return -1;}
  for(i=0;b[i]&&b[i]!=' ';i++){}
@@ -224,7 +236,7 @@ static int rq_headers(Rq*r){
  return body_done(r)?1:0;}
 /* everything has arrived: dechunk, enforce limits, remember it, close the connection */
 static void rq_finish(Rq*r){
- int si=(int)(r-rqs),kind=r->w[0].kind,bl;char*b=rbuf[si];char tmp2[160];
+ int kind=r->w[0].kind,bl;char*b=r->buf;char tmp2[160];
  bl=r->n-r->he-4;
  if(r->chunked)bl=dechunk(b+r->he+4,bl);
  if(r->clen>=0&&bl>r->clen)bl=r->clen;
@@ -272,9 +284,11 @@ static int rq_step(Rq*r,long long now){
   if(now-r->tst>T_HDR){rq_fail(r,"Timed out","The server did not accept the request in time.");return 1;}
   return prog;
  case RS_HEADERS:case RS_BODY:{
-  char*b=rbuf[si];
+  char*b=r->buf;
   while(budget>0&&r->st>=RS_HEADERS&&r->st<RS_COMPLETE){
-   int room=RBUF-1-r->n,want;
+   int room,want;
+   if(r->cap-r->n<16384&&r->cap<RBUF-1){int nc2=r->cap*2>RBUF-1?RBUF-1:r->cap*2;if(!rq_reserve(r,nc2)&&r->cap-r->n<=0){rq_fail(r,"Out of memory","Not enough memory for the response.");return 1;}b=r->buf;}
+   room=r->cap-r->n;
    if(room<=0){rq_fail(r,"Response too large","The response is larger than this browser can hold.");return 1;}
    want=room>16384?16384:room;
    k=rq_recv(r,b+r->n,want);
@@ -306,7 +320,7 @@ static int rq_step(Rq*r,long long now){
 /* ---- handing results over ---- */
 static char jsrh[2048];
 static void js_headers(Rq*r){   /* "name: value\n" lines of the response, for scripts (r's buffer still holds them) */
- const char*b=rbuf[r-rqs];int a=0,o=0;
+ const char*b=r->buf;int a=0,o=0;
  while(a<r->he&&b[a]!='\n')a++;
  a++;
  while(a<r->he&&o<(int)sizeof jsrh-2){jsrh[o++]=b[a]=='\r'?'\n':b[a];a++;}

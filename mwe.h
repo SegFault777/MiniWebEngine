@@ -2,10 +2,16 @@
 /* MiniWebEngine v0.10 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.11"
+#define MWE_VERSION "0.12"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
+/* Memory (v0.12): the engine owns no big static arrays. Before the first mwe_load() give it an allocator that returns
+ * ZERO-FILLED memory (calloc-style; untouched pages cost nothing) and a matching release function. The CLI does this itself.
+ * Typical footprint: document arena 16 MB + layout 11 MB + glyph cache 2 MB reserved when a page is loaded; the JavaScript heap
+ * (16 MB) only for pages with scripts; image pixels and decoder scratch only while images are present/decoded. */
+void mwe_set_alloc(void *(*alloc)(unsigned long), void (*release)(void *));
+/* returns 0 normally, 1 if the document did not fit the arena (shown truncated), -1 if no memory could be allocated */
 int  mwe_load(char *html, int len);
 /* Lay the loaded page out for a viewport width. Returns document height (px). */
 int  mwe_layout(int width);

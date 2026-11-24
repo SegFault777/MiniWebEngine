@@ -6,8 +6,7 @@
  * browser that merely shares the "Mini" naming; it is built on MiniWebEngine.
  *
  * This file: URL handling, HTTP/1.1 response parsing, history, UI chrome.
- * No OS calls. File I/O uses stdio only for file:// pages. */
-#include <stdio.h>
+ * No libc and no OS calls: everything the OS must do goes through the mb_plat_* functions in mb.h. */
 #include "../mwe.h"
 #include "mb.h"
 

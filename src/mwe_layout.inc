@@ -3,11 +3,13 @@
  * layout state, measuring, block and inline layout, list markers.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- layout state and paint list ---- */
-typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov,z;char*t,*hp;N*nd,*on;}Cmd;
-static Cmd cm[MC],dm;
+typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov,z,sk,y0;char*t,*hp;N*nd,*on;}Cmd;
+static Cmd*cm,dm;static int*zo,*zt;static char*zdone;   /* paint-order sort buffers */
 static int nc,W,H,cv=0xffffff;
 static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp,tip;
 static Cmd*bulp;static S*curh;
+typedef struct{N*n,*par;int top,maxy;}Sk;   /* sticky boxes: top offset, bottom of the containing block */
+static Sk sks[64];static int nsk,cursk;
 static int curz,curz2,curctx;   /* stacking: key of the innermost positioned box (and of the one inside a stacking context) */
 static int curop=255,curcl=0,isol,fw=-1,fh=-1,fva,fch=-1,ng,ibA[64];
 typedef struct{int x,y,w,h,side;}Fl;static Fl flst[64];static int nf;
@@ -17,7 +19,7 @@ static N*curn;
 static Cmd*cadd(int k,int x,int y,int w,int h,int c){
  Cmd*p=nc<MC?&cm[nc++]:&dm;
  p->k=k;p->x=x;p->y=y;p->w=w;p->h=h;p->a=0;p->c=c;p->bg=-1;p->fs=16;p->tf=p->u=p->n=p->hn=p->vs=p->ls=p->bi=p->grp=p->ex=0;
- p->z=curz*8192+curz2;p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
+ p->sk=cursk;p->z=curz*8192+curz2;p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
 static int rc(int c,St*s){return c==-3?s->col:c;}
 static void fbounds(int y,int h,int*l,int*r){
  int i;
@@ -359,7 +361,7 @@ static void blk_(N*n,int ax,int aw){
   if(s->bg==0xF1F1F1){s->bg=-1;for(ar=0;ar<4;ar++)s->bw[(int)ar]=0;s->mnw=mk(0,0,1);s->mnh=mk(0,0,1);}}
  ar=ii>=0?(float)ims[ii].h/(float)ims[ii].w:s->ar;
  int ml,mr,mt,mb,pl,pr,pt,pb,bl,br,bt,bb,eh,ev,w,box,cplx,bfc,tt,bt_,top,x0,tw,ys,i,nf0=nf,c0=nc,c1,hcnt=-1,autoh,fin,bh;
- int oz_=curz,oz2_=curz2,octx_=curctx,ocx=cx,ocw=cw,oca=ca,oop=curop,ocl=curcl,as,de,mlA=s->m[3].k==1,mrA=s->m[1].k==1,rad=0,shd=0,cli=-1,lim,fr_;
+ int osk_=cursk,oz_=curz,oz2_=curz2,octx_=curctx,ocx=cx,ocw=cw,oca=ca,oop=curop,ocl=curcl,as,de,mlA=s->m[3].k==1,mrA=s->m[1].k==1,rad=0,shd=0,cli=-1,lim,fr_;
  Cmd*bp=0;Bx*bx=0;
  fw=fh=-1;fva=0;isol=0;
  mt=rl(s->m[0],aw);mb=rl(s->m[2],aw);ml=rl(s->m[3],aw);mr=rl(s->m[1],aw);
@@ -394,6 +396,7 @@ static void blk_(N*n,int ax,int aw){
  if(tt){if(mt>pend)pend=mt;}else{Y+=mt>pend?mt:pend;pend=0;}
  top=Y;x0=ax+ml;tw=w+eh;
  if(s->op<255)curop=curop*s->op/255;
+ if(s->stk&&s->top.k==0&&nsk<64){sks[nsk].n=n;sks[nsk].par=n->par;sks[nsk].top=rl(s->top,0);sks[nsk].maxy=1<<30;cursk=++nsk;}
  if(s->pos>=1){int k=(s->zset?s->zi:0)*2+1;if(!curctx){curz=k;curz2=0;if(s->zset)curctx=1;}else curz2=k;}
  if(cplx){
   bx=&bxs[nbx];
@@ -454,14 +457,19 @@ static void blk_(N*n,int ax,int aw){
   bside(s->bst[2],x0,Y-bb,tw,bb,rc(s->bc[2],s),1);
   bside(s->bst[3],x0,top+bt,bl,bh-bt-bb,rc(s->bc[3],s),0);
   bside(s->bst[1],x0+tw-br,top+bt,br,bh-bt-bb,rc(s->bc[1],s),0);}
+ if(seq(n->tag,"svg")){Cmd*sv=cadd(5,x0+bl,top+bt,tw-bl-br,bh-bt-bb,0);sv->nd=n;}   /* inline svg: painted by svg_paint() */
  if(seq(n->tag,"select")){Cmd*t2=cadd(4,x0+tw-bl-14,top+(bh-5)/2,9,5,0x555555);t2->u=1;}
  if(seq(n->tag,"summary")&&n->par&&seq(n->par->tag,"details")){Cmd*h2=cadd(3,x0,top,tw,bh,0);h2->nd=n->par;}
  if(s->pos==1){
   int dx=0,dy=0;
-  if(s->lf.k==0)dx=rl(s->lf,aw);else if(s->rt.k==0)dx=-rl(s->rt,aw);
-  if(s->top.k==0)dy=rl(s->top,0);else if(s->bot.k==0)dy=-rl(s->bot,0);
+  if(!s->stk){   /* sticky: top/left are thresholds, not offsets */
+   if(s->lf.k==0)dx=rl(s->lf,aw);else if(s->rt.k==0)dx=-rl(s->rt,aw);
+   if(s->top.k==0)dy=rl(s->top,0);else if(s->bot.k==0)dy=-rl(s->bot,0);}
   if(dx||dy)for(i=c0;i<nc;i++){cm[i].x+=dx;cm[i].y+=dy;}
   n->x0=x0+bl+dx;n->y0=top+bt+dy;n->x1=x0+tw-br+dx;n->y1=Y-bb+dy;}
  else if(s->pos>=2){n->x0=x0+bl;n->y0=top+bt;n->x1=x0+tw-br;n->y1=Y-bb;}
- cx=ocx;cw=ocw;ca=oca;curop=oop;curz=oz_;curz2=oz2_;curctx=octx_;
+ if(s->tx.px||s->tx.pc||s->ty.px||s->ty.pc){   /* transform: translate */
+  int tdx=rl((Len){s->tx.px,s->tx.pc,0},tw),tdy=rl((Len){s->ty.px,s->ty.pc,0},Y-top);
+  if(tdx||tdy){for(i=c0;i<nc;i++){cm[i].x+=tdx;cm[i].y+=tdy;}n->x0+=tdx;n->x1+=tdx;n->y0+=tdy;n->y1+=tdy;}}
+ cx=ocx;cw=ocw;ca=oca;curop=oop;cursk=osk_;{int q;for(q=0;q<nsk;q++)if(sks[q].par==n)sks[q].maxy=Y-bb;}curz=oz_;curz2=oz2_;curctx=octx_;
  lx=cx;LH=LA=LD=0;sp=0;lf=nc;ng=0;}

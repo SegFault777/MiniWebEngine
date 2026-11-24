@@ -4,9 +4,10 @@
  * so it can fetch http:// and https:// pages.
  * usage: mb_shot <url|path> out.bmp [width height] [--click X Y] [--wait MS] [--key C] (options run in order) */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "mb.h"
-static unsigned px[1600*1200];
+static unsigned*px;   /* framebuffer (1600x1200 at most), allocated in main */
 static unsigned char rb[1600*3+4];
 #if defined(__unix__) || defined(__APPLE__)
 #include <string.h>
@@ -89,6 +90,9 @@ void mb_plat_random(unsigned char*b,int n){FILE*f=fopen("/dev/urandom","rb");if(
 long long mb_plat_time(void){return (long long)time(0);}
 static void nap_(long us){usleep((useconds_t)us);}
 void mb_plat_idle(int ms){nap_(ms*1000L);}
+static int fail_after=-1,alloc_n;   /* tests: MB_FAIL_ALLOC=N makes the Nth and later allocations fail */
+void*mb_plat_alloc(unsigned long n){if(fail_after<0){const char*e=getenv("MB_FAIL_ALLOC");fail_after=e?atoi(e):1<<30;}if(alloc_n++>=fail_after)return 0;return calloc(1,n);}
+void mb_plat_free(void*p){free(p);}
 static long long realms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (long long)t.tv_sec*1000+t.tv_nsec/1000000;}
 #else
 int mb_plat_connect(const char*h,int p){(void)h;(void)p;return -1;}
@@ -100,8 +104,11 @@ void mb_plat_random(unsigned char*b,int n){(void)b;(void)n;}
 long long mb_plat_time(void){return 0;}
 static void nap_(long us){(void)us;}
 void mb_plat_idle(int ms){(void)ms;}
+void*mb_plat_alloc(unsigned long n){return calloc(1,n);}
+void mb_plat_free(void*p){free(p);}
 static long long realms(void){static long long t;return t+=5;}
 #endif
+int mb_plat_readfile(const char*path,char*buf,int cap){FILE*f=fopen(path,"rb");int n;if(!f)return -1;n=(int)fread(buf,1,(size_t)cap,f);fclose(f);return n;}
 long long mb_plat_ms(void){return realms();}
 void mb_plat_alert(const char*s,int n){fprintf(stderr,"alert: %.*s\n",n,s);}
 void mb_plat_log(const char*s,int n){fprintf(stderr,"console: %.*s",n,s);}
@@ -123,6 +130,8 @@ int main(int ac,char**av){
 #if defined(__unix__) || defined(__APPLE__)
  signal(SIGPIPE,SIG_IGN);
 #endif
+ px=(unsigned*)calloc((size_t)w*(size_t)h,4);
+ if(!px){fprintf(stderr,"out of memory\n");return 1;}
  mb_init(av[1],w,h);
  {int e=-1;for(i=3;i<ac;i++)if(!strcmp(av[i],"--early")&&i+1<ac)e=num(av[i+1]);
   if(e>=0){long long t=realms()+e;while(realms()<t){mb_tick();nap_(2000);}}   /* snapshot of a half-loaded page */

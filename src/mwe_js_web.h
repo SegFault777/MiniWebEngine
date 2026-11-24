@@ -10,7 +10,8 @@
 typedef int (*JFetchCb)(const char *method, const char *url, const char *body, int blen, const char *reqheaders,
                         char *out, int cap, int *status, char *rh, int rhcap);
 static JFetchCb jfetchcb;
-static char jfetchbuf[1 << 22], jfetchrh[2048];
+#define JFETCHSZ (1 << 22)
+static char *jfetchbuf, jfetchrh[2048];   /* jfetchbuf: only the synchronous host callback (CLI/tests) needs it; lent on first use */
 
 static void jcopyc(char *d, int cap, JStr *s) { int i; for (i = 0; i + 1 < cap && i < s->len; i++) d[i] = s->d[i]; d[i] = 0; }
 
@@ -26,7 +27,9 @@ JNAT(jw___fetch) {
     if (b.t == JT_S) { bp = b.u.s->d; bl = b.u.s->len; }
     jfetchrh[0] = 0;
     if (!jfetchcb) { jaddpr(r, jintc("status"), jnum(0), 0); jaddpr(r, jintc("error"), jcv("fetch is not available in this host"), 0); return jobj(r); }
-    n = jfetchcb(m, u, bp, bl, hd, jfetchbuf, (int)sizeof jfetchbuf - 1, &st, jfetchrh, (int)sizeof jfetchrh);
+    if (!jfetchbuf) jfetchbuf = (char *)mem_get(JFETCHSZ);
+    if (!jfetchbuf) return jthrowerr(jErrT, "out of memory");
+    n = jfetchcb(m, u, bp, bl, hd, jfetchbuf, JFETCHSZ - 1, &st, jfetchrh, (int)sizeof jfetchrh);
     jaddpr(r, jintc("status"), jnum(n >= 0 ? st : 0), 0);
     jaddpr(r, jintc("body"), jstrv(n > 0 ? jnewstr(jfetchbuf, n) : &jemptys), 0);
     jaddpr(r, jintc("headers"), jstrv(jcstr(jfetchrh)), 0);

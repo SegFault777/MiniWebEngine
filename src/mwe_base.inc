@@ -3,12 +3,13 @@
  * arena allocator, strings, UTF-8, font metrics.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- arena (no malloc) ---- */
-static long long ar[(1<<24)/8],dmy[64];
+#define ARSZ (1<<24)
+static long long*ar,dmy[64];       /* ar: document arena, lent by the host (see mem_doc) */
 static int ap,full;
 static void*al(int n){
  char*p;int i;
  n=(n+7)&~7;
- if(ap+n>(int)sizeof ar||n>(int)sizeof dmy*0+(1<<22)){full=1;p=(char*)dmy;n=(int)sizeof dmy;}
+ if(!ar||ap+n>ARSZ||n>(int)sizeof dmy*0+(1<<22)){full=1;p=(char*)dmy;n=(int)sizeof dmy;}
  else{p=(char*)ar+ap;ap+=n;}
  for(i=0;i<n;i++)p[i]=0;
  return p;}

@@ -9,7 +9,7 @@
 #define SBW 12
 #define UC 1024
 
-static char pg[PG+1];
+static char*pg;   /* page source, lent in mb_init */
 static char cur[UC],ub[UC],stt[UC],tmp[UC*2];
 static char hist[32][512];static int hsy[32],hn,hi;
 static int Wd,Ht,sy,ph,plen,ucur,uf,usel,uoff,hov,ready,sec; /* sec: 0 local page, 1 http, 2 https (verified) */

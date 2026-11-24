@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+static void*jt_alloc(unsigned long n){return calloc(1,n);}
 static char buf[1<<20];
 static void flush(void){int n;const char*l=mwe_js_log(&n);if(n)fwrite(l,1,n,stdout);mwe_js_log_clear();
  {const char*a;int al;while((a=mwe_js_alert(&al)))printf("[alert] %s\n",a);}
@@ -12,6 +13,7 @@ int main(int ac,char**av){
  FILE*f=fopen(av[1],"rb");int n,i,h;long long now=0;
  if(!f)return 2;
  n=(int)fread(buf,1,sizeof buf-1,f);fclose(f);
+ mwe_set_alloc(jt_alloc,free);
  mwe_load(buf,n);mwe_js_time(1767225600000LL,0);mwe_js_url("file:///t/page.html");
  mwe_js_run();h=mwe_layout(800);flush();
  for(i=2;i<ac;i++){

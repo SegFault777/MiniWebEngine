@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.11** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.12** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -54,6 +54,17 @@ under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/READ
 Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
+
+## What is new in v0.12 - memory, no C library, SVG, sticky, transform
+
+- **Static memory 150 MB -> 2.4 MB** (`size` of the headless browser; the CLI engine 117 MB -> 2.5 MB). The engine no longer owns big arrays: the host lends memory with `mwe_set_alloc()` (zero-filled, calloc-style) and the browser with `mb_plat_alloc()`. Lent on demand: document arena/layout buffers (first `mwe_load`), JavaScript heap (16 MB, only for pages with scripts; `-DMWE_JS_HEAP_MB=` to change), glyph cache (first glyph), each decoded image and decoder scratch (only while decoding), response buffers (start at 64 KB, grow per request, freed when delivered), TLS contexts (~230 KB, per connection), the 8 MB cache (first entry). A typical page now runs inside a 50 MB address-space limit (v0.11 needed >120 MB). Out of memory no longer crashes: `mwe_load()` returns -1 and the browser says so; images that do not fit simply fail.
+- **No C library**: `tests/nolibc.sh` proves it. The engine, the TLS stack and the browser core build with `-ffreestanding -nostdlib` and leave no undefined symbol except the host interface (`mb_plat_*`, now including `mb_plat_readfile`), at every optimization level, and include no libc header. The `mwe` command-line tool also builds as a static executable linking against nothing (`-DMWE_NOLIBC -ffreestanding -fno-builtin -nostdlib -static`, Linux x86-64, raw system calls). `mb_shot.c` (headless test host) and `mb_win32.c` are the host layers: they use the C library / Win32 because DNS, sockets and threads must come from the OS.
+- **Inline `<svg>`** (`src/mwe_svg.h`): rect (rounded), circle, ellipse, line, polyline, polygon, path (all commands incl. arcs), g, use, nested svg, viewBox + preserveAspectRatio, transform, fill/stroke/opacity/fill-rule, currentColor, gradients as their first stop colour. No text, filters, masks, clip-path, patterns, dashes, `<style>` sheets for svg elements, `<img src=x.svg>`.
+- **`position: sticky`** (top threshold, stays inside its containing block), **`transform: translate/translateX/translateY`** (px, em, %; scale/rotate/skew are ignored).
+- Fixed: the GC mark-bitmap clear count after the buffers became pointers (caught by `-Wsizeof-pointer-div`).
+- Tests: `tests/layout/run.sh` (z-index, transform, sticky, svg), `tests/nolibc.sh`, `tests/net/run.sh` (28), JS 9 suites (also under GC stress + ASan), SVG fuzzing under ASan/UBSan (300 mutated documents), allocation-failure injection (`MB_FAIL_ALLOC=N` with `mb_shot`).
+
+**Not done (next)**: WebP/AVIF decoding, `await` that really suspends (coroutines), CSS animations/transitions, scale/rotate transforms, text selection/copy, a real drop-down list, `<img src=x.svg>`.
 
 ## What is new in v0.11 - forms, cookies, stacking
 
@@ -184,7 +195,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.11)
+## Supported (v0.12)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),

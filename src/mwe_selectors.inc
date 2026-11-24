@@ -7,7 +7,7 @@ typedef struct{S n,v;int op;}At;
 typedef struct{int t,a,b;}Ps;
 typedef struct{S tag,id,cls[3];int nc;At at[3];int na;Ps ps[3];int np;int nt;}Cp;
 typedef struct{Cp c[4];char comb[4];int ns,spec,pe,mnw,mxw,mnh,mxh;S d;}Rule;
-static Rule rls[MR];static int nr,rdirty;
+static Rule*rls;static int nr,rdirty;
 static Cp nots[96];static int nnot;
 static int qb[4]={0,1<<30,0,1<<30};
 enum{PS_FIRST=1,PS_LAST,PS_ONLY,PS_NTH,PS_NTHL,PS_FIRSTT,PS_LASTT,PS_ONLYT,PS_NTHT,PS_EMPTY,PS_ROOT,PS_LINK,PS_CHECKED,PS_DISABLED,PS_ENABLED,PS_FOCUS};

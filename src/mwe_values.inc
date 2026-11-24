@@ -77,6 +77,7 @@ static Len lenv(S v,int fs){
  r=eadd();esk();
  if(ei<es.n||eerr)r.k=2;
  return r;}
+static int has_s(S v,int q,const char*p){int i;for(i=0;p[i];i++){if(q+i>=v.n||lc(v.p[q+i])!=p[i])return 0;}return 1;}
 static int rl(Len l,int base){return l.k==0?l.px+(int)((long long)base*l.pc/100):0;}
 
 /* ---- colors: 0xRRGGBB opaque, ((127-A/2)<<24)|RGB translucent, -1 transparent, -2 invalid, -3 currentColor ---- */

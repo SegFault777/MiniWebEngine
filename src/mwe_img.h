@@ -124,8 +124,13 @@ static int mi_zlib(const mu8 *s, int sn, mu8 *d, int dn) {
 }
 
 /* ---------------------------------------------------------------- scratch + PNG */
-#define MI_SCRATCH (24 << 20)
-static mu8 mi_scr[MI_SCRATCH];
+#ifndef MI_ALLOC                                   /* standalone use (tests/img): plain calloc/free */
+#include <stdlib.h>
+#define MI_ALLOC(n) calloc(1, (n))
+#define MI_FREE(p) free(p)
+#endif
+#define MI_SCRATCH (24 << 20)                      /* largest scratch one decode may ask for */
+static mu8 *mi_scr;                                /* allocated by the decoder that needs it, released by mi_decode() */
 
 static int mi_paeth(int a, int b, int c) {
     int p = a + b - c, pa = p > a ? p - a : a - p, pb = p > b ? p - b : b - p, pc = p > c ? p - c : c - p;
@@ -180,6 +185,8 @@ static int mi_png(const mu8 *d, int n, unsigned *out, int W, int H) {
       }
       if (sz <= 0 || sz + n + 64 > MI_SCRATCH) return 0;
       rawsz = (int)sz; }
+    mi_scr = (mu8 *)MI_ALLOC((long long)rawsz + n + 64);
+    if (!mi_scr) return 0;
     raw = mi_scr; cbuf = mi_scr + rawsz;          /* compressed IDAT bytes are gathered after the raw area */
     for (i = 0; i < 256; i++) pal[i] = 0xFF000000u;
     while (pos + 12 <= n) {
@@ -530,8 +537,11 @@ static int mi_jpg(const mu8 *d, int n, unsigned *out, int W, int H) {
             for (k = 0; k < nc; k++) {
                 cp[k].pw = mcux * cp[k].h * 8; cp[k].ph = mcuy * cp[k].v * 8; cp[k].pred = 0;
                 if (used + (long long)cp[k].pw * cp[k].ph > MI_SCRATCH) return 0;
-                cp[k].pl = mi_scr + used; used += (long long)cp[k].pw * cp[k].ph;
+                used += (long long)cp[k].pw * cp[k].ph;
             }
+            mi_scr = (mu8 *)MI_ALLOC(used);
+            if (!mi_scr) return 0;
+            for (used = 0, k = 0; k < nc; k++) { cp[k].pl = mi_scr + used; used += (long long)cp[k].pw * cp[k].ph; }
             b.p = d; b.n = n; b.i = i + len; b.cnt = 0; b.eof = 0;
             for (my = 0; my < mcuy; my++) for (mx = 0; mx < mcux; mx++) {
                 if (ri && rst == ri) {                      /* restart: realign, skip the RSTn marker */
@@ -610,12 +620,15 @@ static int mi_probe(const mu8 *d, int n, int *w, int *h) {
     return 0;
 }
 static int mi_decode(int fmt, const mu8 *d, int n, unsigned *out, int w, int h) {
+    int r = 0;
+    mi_scr = 0;
     switch (fmt) {
-    case 1: return mi_png(d, n, out, w, h);
-    case 2: return mi_jpg(d, n, out, w, h);
-    case 3: return mi_gif(d, n, out, w, h);
-    case 4: return mi_bmp(d, n, out, w, h);
+    case 1: r = mi_png(d, n, out, w, h); break;
+    case 2: r = mi_jpg(d, n, out, w, h); break;
+    case 3: r = mi_gif(d, n, out, w, h); break;
+    case 4: r = mi_bmp(d, n, out, w, h); break;
     }
-    return 0;
+    if (mi_scr) { MI_FREE(mi_scr); mi_scr = 0; }
+    return r;
 }
 #endif

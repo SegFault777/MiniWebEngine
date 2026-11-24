@@ -29,7 +29,9 @@ static void go(const char*in,int push);
 static void finish_commit(const char*url,int secv,const mb_tls_info_t*ti,const char*host);
 
 /* ---- per-page resource bookkeeping ---- */
-static char csspool[1<<18],jspool[1<<20];
+#define CSSPOOL (1<<18)
+#define JSPOOL (1<<20)
+static char*csspool,*jspool;   /* lent on first use */
 static int cssn,cssst[8],cssoff[8],csslen[8],cssapp,cssused;     /* st: 1 pending, 2 arrived, 3 failed/skipped */
 static int jsn,jsst[16],jsoff[16],jslen[16],jsasyn[16],jsdone[16],jsran,jsused;
 static unsigned char imreq[64];
@@ -42,13 +44,15 @@ static void res_reset(void){
  for(i=0;i<64;i++)imreq[i]=0;}
 static void css_got(int i,const char*b,int bl){
  if(i<0||i>=8||cssst[i]!=1)return;
- if(cssused+bl+1>(int)sizeof csspool){cssst[i]=3;return;}
+ if(!csspool&&!(csspool=(char*)mb_plat_alloc(CSSPOOL)))return;
+ if(cssused+bl+1>CSSPOOL){cssst[i]=3;return;}
  mcopy(csspool+cssused,b,bl);csspool[cssused+bl]=0;
  cssoff[i]=cssused;csslen[i]=bl;cssused+=bl+1;cssst[i]=2;}
 static void js_got(int kind,int i,const char*b,int bl){
  (void)kind;
  if(i<0||i>=16||jsst[i]!=1)return;
- if(jsused+bl+1>(int)sizeof jspool){jsst[i]=3;return;}
+ if(!jspool&&!(jspool=(char*)mb_plat_alloc(JSPOOL)))return;
+ if(jsused+bl+1>JSPOOL){jsst[i]=3;return;}
  mcopy(jspool+jsused,b,bl);jspool[jsused+bl]=0;
  jsoff[i]=jsused;jslen[i]=bl;jsused+=bl+1;jsst[i]=2;}
 static void img_got(int i,const char*b,int bl){
@@ -214,7 +218,8 @@ static void finish_commit(const char*url,int secv,const mb_tls_info_t*ti,const c
  sec=secv;secpanel=0;
  if(ti){pinfo=*ti;cpy(phost,sizeof phost,host);}
  hist_commit();
- mwe_load(pg,plen);ready=1;loading=0;
+ if(mwe_load(pg,plen)<0){ready=0;loading=0;cpy(stt,UC,"Out of memory: cannot show this page");return;}
+ ready=1;loading=0;
  res_reset();
  if(want_sy<0)sy=0;
  tcommit=mb_plat_ms();
@@ -294,7 +299,7 @@ const char *mb_summary(void){   /* one line of timing/statistics for tests (mill
  bs(o,sizeof o);
  ba("first-render=");ba_int(tcommit?tcommit-tnav:-1);ba("ms settled=");ba_int(tsettle?tsettle-tnav:-1);
  ba("ms started=");ba_int(nstarted_);ba(" done=");ba_int(ndone_);ba(" failed=");ba_int(nfail_);ba(" cancelled=");ba_int(ncancel_);
- ba(" redirects=");ba_int(nredir_);ba(" cache-hits=");ba_int(ncache_);
+ ba(" busy=");ba_int(loading);ba(res_pending()?"p":"-");ba_int(rdirty_);ba(" redirects=");ba_int(nredir_);ba(" cache-hits=");ba_int(ncache_);
  return o;}
 int mb_tick(void){ /* called by the platform every ~16 ms; 1 = redraw needed */
  int r=0;long long now;char st2[UC];
@@ -303,6 +308,7 @@ int mb_tick(void){ /* called by the platform every ~16 ms; 1 = redraw needed */
  now=mb_plat_ms();
  imgbudget=1;
  if(net_pump(0))r=1;
+ if(!ready)rdirty_=0;
  if(ready){
   if(res_settle())rdirty_=1;
   if(mwe_js_active()&&mwe_js_tick(now)){rdirty_=1;}
@@ -315,6 +321,9 @@ int mb_tick(void){ /* called by the platform every ~16 ms; 1 = redraw needed */
  inpump=0;
  return r;}
 void mb_init(const char*start,int w,int h){
+ mwe_set_alloc(mb_plat_alloc,mb_plat_free);
+ if(!pg)pg=(char*)mb_plat_alloc(PG+1);
+ if(!pg){cpy(stt,UC,"Out of memory");return;}
  mwe_js_set_fetch_async(js_fetch_start,js_fetch_abort);
  mwe_js_set_poll(js_poll);
  mwe_js_set_cookies(js_cookie_get,js_cookie_set);

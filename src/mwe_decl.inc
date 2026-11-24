@@ -3,6 +3,7 @@
  * style defaults, custom properties / var(), declaration parser.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- style defaults, custom properties, var() ---- */
+static void parse_transform(St*s,S v);
 static St*cpa; /* parent style while a declaration block is applied (for "inherit") */
 static void defst(St*s,St*pa){
  int i;char*b=(char*)s;
@@ -336,9 +337,11 @@ static void prop(St*s,S k,S v){
   else s->disp=D_BLOCK;}
  else if(kw(k,"visibility"))s->vis=kw(t[0],"hidden")||kw(t[0],"collapse");
  else if(kw(k,"z-index")){if(kw(t[0],"auto"))s->zset=0;else{l=lenv(t[0],16);if(l.k==3){x=l.px/1000;s->zi=x>2000?2000:x<-2000?-2000:x;s->zset=1;}}}
+ else if(kw(k,"transform")){s->tx=s->ty=(Len){0,0,0};if(!kw(v,"none"))parse_transform(s,v);}
  else if(kw(k,"opacity")){l=lenv(t[0],16);x=l.k==3?l.px*255/1000:l.k==0&&l.pc?l.pc*255/100:-1;if(x>=0)s->op=x>255?255:x;}
  else if(kw(k,"overflow")||kw(k,"overflow-x")||kw(k,"overflow-y"))s->ov=(kw(t[0],"hidden")||kw(t[0],"clip")||kw(t[0],"scroll"))?1:kw(t[0],"auto")?2:0;
- else if(kw(k,"position"))s->pos=kw(t[0],"relative")||kw(t[0],"sticky")?1:kw(t[0],"absolute")?2:kw(t[0],"fixed")?3:0;
+ else if(kw(k,"position")){s->stk=kw(t[0],"sticky");s->pos=kw(t[0],"relative")||kw(t[0],"sticky")?1:kw(t[0],"absolute")?2:kw(t[0],"fixed")?3:0;}
+ else if(0)s->pos=kw(t[0],"absolute")?2:kw(t[0],"fixed")?3:0;
  else if(kw(k,"float"))s->fl=kw(t[0],"left")?1:kw(t[0],"right")?2:0;
  else if(kw(k,"clear"))s->clr=kw(t[0],"left")?1:kw(t[0],"right")?2:kw(t[0],"both")?3:0;
  else if(kw(k,"top")){l=lenv(t[0],s->fs);if(l.k!=2)s->top=l;}
@@ -502,6 +505,23 @@ static void prop(St*s,S k,S v){
      s->gtn++;}}}
   else if(kw(k,"grid-column")||kw(k,"grid-column-end")||kw(k,"grid-column-start")||kw(k,"grid-row")||kw(k,"grid-row-end")||kw(k,"grid-row-start")){
    gline(v,k,s);}}}
+/* transform: only translate(), translateX() and translateY() (px, em, %) are applied, summed; scale/rotate/skew/matrix are ignored */
+static void parse_transform(St*s,S v){
+ int q=0,i;
+ while(q<v.n){
+  int ax=-1;
+  if(has_s(v,q,"translatex("))ax=0;else if(has_s(v,q,"translatey("))ax=1;else if(has_s(v,q,"translate("))ax=2;
+  if(ax<0){q++;continue;}
+  while(q<v.n&&v.p[q]!='(')q++;
+  q++;
+  {int a=q,k=0;S arg[2];
+   while(q<v.n&&v.p[q]!=')'){if(v.p[q]==','&&k==0){arg[0]=trim((S){v.p+a,q-a});k=1;a=q+1;}q++;}
+   arg[k]=trim((S){v.p+a,q-a});
+   for(i=0;i<=k;i++){
+    Len l=lenv(arg[i],16);
+    if(l.k!=0)continue;
+    if(ax==0||(ax==2&&i==0)){s->tx.px+=l.px;s->tx.pc+=l.pc;}
+    else{s->ty.px+=l.px;s->ty.pc+=l.pc;}}}}}
 static void decl(St*s,S d,int pass){
  int i=0,a,b,pd,e,imp,j;S k,v;
  while(i<d.n){

@@ -24,7 +24,7 @@ static unsigned imsamp(const Im*m,float u,float v){
   {float pa=(float)(p>>24)*wgt[k];a+=pa;r+=pa*(float)((p>>16)&255);g+=pa*(float)((p>>8)&255);b+=pa*(float)(p&255);}}
  if(a<=0.5f)return 0;
  return ((unsigned)(a+0.5f)<<24)|((unsigned)(r/a+0.5f)<<16)|((unsigned)(g/a+0.5f)<<8)|(unsigned)(b/a+0.5f);}
-static Bx bxs[8192];static int nbx;
+static Bx*bxs;static int nbx;
 static float sq(float v){float x;int i;if(v<=0)return 0;x=v>1?v*0.5f:1;for(i=0;i<8;i++)x=0.5f*(x+v/x);return x;}
 static float sn(float a){
  float t,r,a2;

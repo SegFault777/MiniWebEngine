@@ -1,9 +1,12 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.11)
+ * MiniWebEngine JavaScript subset (v0.12)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */
-#define JHEAP (24<<20)
+#ifndef MWE_JS_HEAP_MB
+#define MWE_JS_HEAP_MB 16
+#endif
+#define JHEAP (MWE_JS_HEAP_MB<<20)
 #define JASTSZ (3<<20)
 #define JMAXDEPTH 256
 #ifndef JMAXSTEPS
@@ -22,8 +25,8 @@ typedef struct{unsigned sz;unsigned char ty,mk,x1,x2;}JHd;
 enum{BT_FREE,BT_STR,BT_OBJ,BT_PRS,BT_VALS};
 
 /* ---- heap ---- */
-static long long jhp[JHEAP/8];
-static ju64 jbm[JHEAP/512];            /* one bit per 8 bytes: set where a block starts (interior pointer lookup) */
+static long long*jhp;                  /* the JavaScript heap, lent by the host when the first script runs */
+static ju64*jbm;            /* one bit per 8 bytes: set where a block starts (interior pointer lookup) */
 static int jtop,joom,jgcn,jlimit=JHEAP-(512<<10),jgcok,jingc;
 static long jallocd,jthresh=4<<20;
 static char*jstackbase;
@@ -349,7 +352,7 @@ static int (*jpollcb)(long long*);     /* host poll while a script awaits: advan
 
 /* ---- garbage collector: precise heap marking + conservative scan of the C stack ---- */
 #define JSTK 65536
-static JHd*jstk[JSTK];static int jsp,jmo;
+static JHd**jstk;static int jsp,jmo;
 static void jmarkp(const void*p){
  JHd*h;
  if(!p||!jinheap(p))return;
@@ -416,7 +419,7 @@ static void jgc(void){
   jdrain();}
  for(i=0;i<130;i++)jfree[i]=0;
  jbig=0;
- for(i=0;i<(int)(sizeof jbm/sizeof jbm[0]);i++)jbm[i]=0;
+ for(i=0;i<(int)(JHEAP/512);i++)jbm[i]=0;
  p=(char*)jhp;end=p+jtop;run=0;rs=0;
  while(p<end){
   h=(JHd*)p;
@@ -456,7 +459,7 @@ enum{B_ADD=1,B_SUB,B_MUL,B_DIV,B_MOD,B_EXP,B_SHL,B_SHR,B_USHR,B_AND,B_OR,B_XOR,B
 #define JF_REST 1
 #define JF_SHORT 8
 struct JNd{unsigned char t,op,fl,x;int line;JNd*a,*b,*c,*d,*nx;JStr*s;double num;};
-static char jast[JASTSZ];static int jastp;
+static char*jast;static int jastp;
 static JNd*jnd(int t){
  JNd*n;unsigned i;
  jastp=(jastp+7)&~7;
@@ -496,7 +499,8 @@ static void jperr(const char*m){
  jtk=TK_EOF;jpos=jend;}
 static int jidst(int c){return(c>='a'&&c<='z')||(c>='A'&&c<='Z')||c=='_'||c=='$'||c>=0x80;}
 static int jidch(int c){return jidst(c)||(c>='0'&&c<='9');}
-static char jlexb[1<<20];
+#define JLEXSZ (1<<20)
+static char*jlexb;
 static int jbraceend(int i);
 static int jtplend(int i){
  while(i<jend){
@@ -577,7 +581,7 @@ static void jnext(void){
   char*o=jlexb;int n=0;
   i=++jpos;
   while(jpos<jend&&jsrc[jpos]!=c){
-   if(n>(int)sizeof jlexb-8){jperr("string literal too long");return;}
+   if(n>(int)JLEXSZ-8){jperr("string literal too long");return;}
    if(jsrc[jpos]=='\n'){jperr("unterminated string");return;}
    if(jsrc[jpos]=='\\'){jpos++;n+=jesc(jsrc,&jpos,jend,o+n);}
    else o[n++]=jsrc[jpos++];}
@@ -3082,8 +3086,9 @@ static char jnavb[1024];static int jnavn;
 #define JMAXSCR 64
 
 static char*jextp[JMAXSCR];static int jextn[JMAXSCR];
-static char jserb[1<<20];static int jsern;
-static void jsa(const char*p,int n){int i;for(i=0;i<n&&jsern<(int)sizeof jserb-1;i++)jserb[jsern++]=p[i];}
+#define JSERSZ (1<<20)
+static char*jserb;static int jsern;
+static void jsa(const char*p,int n){int i;for(i=0;i<n&&jsern<JSERSZ-1;i++)jserb[jsern++]=p[i];}
 static void jsac(const char*p){int n=0;while(p[n])n++;jsa(p,n);}
 static S jpers(const char*p,int n){char*b=al(n+1);int i;for(i=0;i<n;i++)b[i]=p[i];b[n]=0;return(S){b,n};}
 static S jpersj(JStr*s){return jpers(s->d,s->len);}
@@ -3781,6 +3786,13 @@ static void jconst(JOb*o,const char*n,double d){jaddpr(o,jcstr(n),jnum(d),3);}
 #include "mwe_js_async.h"
 #include "mwe_js_web.h"
 #include "mwe_js_proxy.h"
+static void jmemfree(void){mem_rel(jhp);mem_rel(jbm);mem_rel(jast);mem_rel(jstk);mem_rel(jlexb);mem_rel(jserb);jhp=0;jbm=0;jast=0;jstk=0;jlexb=0;jserb=0;}
+static int jmem(void){   /* heap + parser buffers, kept for later pages once lent */
+ if(jhp)return 1;
+ jhp=(long long*)mem_get(JHEAP);jbm=(ju64*)mem_get((unsigned long)(JHEAP/512)*sizeof(ju64));jast=(char*)mem_get(JASTSZ);
+ jstk=(JHd**)mem_get((unsigned long)JSTK*sizeof(JHd*));jlexb=(char*)mem_get(JLEXSZ);jserb=(char*)mem_get(JSERSZ);
+ if(!jhp||!jbm||!jast||!jstk||!jlexb||!jserb){jmemfree();return 0;}
+ return 1;}
 static void jinit(void){
  int i;JOb*o,*f;
  jgcok=0;jingc=0;jallocd=0;jthresh=4L<<20;
@@ -3788,7 +3800,7 @@ static void jinit(void){
  jthresh=JGC_STRESS;
 #endif
  jlimit=JHEAP-(512<<10);
- for(i=0;i<(int)(sizeof jbm/sizeof jbm[0]);i++)jbm[i]=0;
+ for(i=0;i<(int)(JHEAP/512);i++)jbm[i]=0;
  jtop=0;joom=0;for(i=0;i<130;i++)jfree[i]=0;jbig=0;
  jastp=0;for(i=0;i<JIH;i++)jih[i]=0;
  jnlst=jnt=jnw=0;jtmid=1;jlogn=0;jlog[0]=0;jalertn=0;jnavn=0;jlevel=0;jdirty=0;
@@ -3945,6 +3957,7 @@ static void jrunsrc(const char*src,int n,const char*what){
 int mwe_js_run(void){
  int i,ei=0;JAPI
  if(!jnscr)return 0;
+ if(!jmem())return 0;
  jinit();
  jenter();
  jrunsrc(MWE_JS_PRELUDE,(int)sizeof(MWE_JS_PRELUDE)-1,"prelude");   /* web platform APIs written in JavaScript */

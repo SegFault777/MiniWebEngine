@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.11"
+#define MB_VERSION "0.12"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* Non-blocking TCP sockets (v0.10). Nothing in the core ever waits on the network; the platform layer must
@@ -12,6 +12,9 @@ int  mb_plat_connect_poll(int h);                       /* 1 connected, 0 still 
 int  mb_plat_send(int h, const void *buf, int n);       /* bytes sent (>0), 0 would block, -1 error */
 int  mb_plat_recv(int h, void *buf, int n);             /* >0 bytes, -2 nothing yet, 0 closed by the peer, -1 error */
 void mb_plat_close(int h);                              /* safe at any time, also while connecting */
+int  mb_plat_readfile(const char *path, char *buf, int cap);   /* bytes read (0..cap), or -1 if it cannot be opened */
+void *mb_plat_alloc(unsigned long n);                   /* zero-filled memory (calloc-style, lazily committed), or NULL */
+void mb_plat_free(void *p);
 void mb_plat_idle(int ms);                              /* sleep up to ms (only used while a script awaits the network) */
 void mb_plat_random(unsigned char *buf, int n);         /* cryptographically secure bytes */
 long long mb_plat_time(void);                           /* seconds since 1970-01-01 UTC */

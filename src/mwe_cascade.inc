@@ -5,7 +5,7 @@
 /* ---- user-agent stylesheet ---- */
 static const char UA[]=
 "html,body,div,p,h1,h2,h3,h4,h5,h6,ul,ol,li,hr,pre,blockquote,section,article,header,footer,nav,main,aside,form,fieldset,legend,figure,figcaption,address,dl,dt,dd,details,summary,hgroup,menu,dir,center,optgroup,caption,search{display:block}"
-"head,style,script,noscript,title,meta,link,base,template,noembed,area,datalist,param,source,track,svg,option,audio,colgroup,col,[hidden],dialog:not([open]),input[type=hidden]{display:none}"
+"head,style,script,noscript,title,meta,link,base,template,noembed,area,datalist,param,source,track,option,audio,colgroup,col,[hidden],dialog:not([open]),input[type=hidden]{display:none}"
 "li{display:list-item}table{display:table;border-spacing:2px}tr{display:table-row}td,th{display:table-cell;padding:1px}thead,tbody,tfoot{display:table-row-group}"
 "body{margin:8px}p,dl,blockquote,figure,pre,ul,ol,menu,hgroup,fieldset{margin:1em 0}"
 "h1{font-size:2em;margin:.67em 0}h2{font-size:1.5em;margin:.83em 0}h3{font-size:1.17em;margin:1em 0}h4{margin:1.33em 0}h5{font-size:.83em;margin:1.67em 0}h6{font-size:.67em;margin:2.33em 0}"
@@ -19,6 +19,7 @@ static const char UA[]=
 "pre{white-space:pre}textarea{white-space:pre-wrap}center{text-align:center}th{text-align:center}caption{text-align:center}"
 "fieldset{margin:0 2px;padding:.35em .75em .625em;border:1px solid #c0c0c0}legend{padding:0 2px}"
 "img{display:inline-block;min-width:16px;min-height:16px;background:#f1f1f1;border:1px solid #d0d0d0;color:#666;box-sizing:border-box}"
+"svg{display:inline-block}svg *{display:none}"
 "iframe,video,canvas,object,embed{display:inline-block;width:300px;height:150px;background:#eee;border:1px solid #ccc;box-sizing:border-box}"
 "input,button,select,textarea{display:inline-block;font-size:13px;color:#000;box-sizing:border-box}"
 "input,select,textarea{background:#fff;border:1px solid #767676;border-radius:2px;padding:2px 4px}input{width:170px}"
@@ -58,9 +59,10 @@ static void hints(N*c,St*s){
    v=numat(t,"border",0);if(v>0)for(i=0;i<4;i++){s->bw[i]=1;s->bst[i]=1;s->bc[i]=0xa0a0a0;}}
   a=getattr(c,"valign");if(a.p)s->vaa=seq(a,"top")?1:seq(a,"bottom")?3:seq(a,"middle")?2:0;
   if(getattr(c,"nowrap").p)s->ws=1;}
- if(seq(c->tag,"table")||seq(c->tag,"td")||seq(c->tag,"th")||seq(c->tag,"img")||seq(c->tag,"iframe")||seq(c->tag,"canvas")||seq(c->tag,"video")||seq(c->tag,"embed")||seq(c->tag,"object")||seq(c->tag,"hr")||seq(c->tag,"col")){
+ if(seq(c->tag,"table")||seq(c->tag,"td")||seq(c->tag,"th")||seq(c->tag,"img")||seq(c->tag,"iframe")||seq(c->tag,"canvas")||seq(c->tag,"svg")||seq(c->tag,"video")||seq(c->tag,"embed")||seq(c->tag,"object")||seq(c->tag,"hr")||seq(c->tag,"col")){
   v=numat(c,"width",&pc);if(v>=0)s->w=pc?mk(0,v,0):mk(v,0,0);
-  v=numat(c,"height",&pc);if(v>=0&&!pc)s->h=mk(v,0,0);}
+  v=numat(c,"height",&pc);if(v>=0&&!pc)s->h=mk(v,0,0);
+  if(seq(c->tag,"svg")){if(s->w.k==1)s->w=mk(300,0,0);if(s->h.k==1)s->h=mk(150,0,0);}}
  if(seq(c->tag,"div")||seq(c->tag,"p")||seq(c->tag,"td")||seq(c->tag,"th")||seq(c->tag,"tr")||(c->tag.n==2&&lc(c->tag.p[0])=='h'&&isdg(c->tag.p[1]))){
   a=getattr(c,"align");if(a.p)s->al=seq(a,"center")?1:seq(a,"right")?2:0;}
  if(seq(c->tag,"font")){

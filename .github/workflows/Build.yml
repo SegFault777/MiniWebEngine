@@ -101,6 +101,12 @@ jobs:
           python3 -m pip install --quiet pillow
           bash tests/net/run.sh
 
+      - name: Layout tests (z-index, transform, sticky, svg) and the no-libc guarantee
+        run: |
+          python3 -m pip install --quiet pillow
+          sh tests/layout/run.sh
+          sh tests/nolibc.sh
+
       - name: Report binary sizes
         run: |
           for f in mwe mwe.exe mb_shot mb_shot.exe; do

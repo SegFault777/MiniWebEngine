@@ -133,6 +133,15 @@ void mb_plat_close(int h){
  else if(sk2[h].st==2||sk2[h].st==3){if(sk2[h].fd!=INVALID_SOCKET)closesocket(sk2[h].fd);sk2[h].fd=INVALID_SOCKET;sk2[h].st=0;}
  LeaveCriticalSection(&skcs);}
 void mb_plat_idle(int ms){Sleep((DWORD)ms);}
+void *mb_plat_alloc(unsigned long n){return HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,(SIZE_T)n);}   /* zeroed; large blocks are committed lazily by the OS */
+int mb_plat_readfile(const char *path, char *buf, int cap){   /* UTF-8 path */
+ WCHAR w[1024];HANDLE h;DWORD got=0,total=0;
+ if(!MultiByteToWideChar(CP_UTF8,0,path,-1,w,1024))return -1;
+ h=CreateFileW(w,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+ if(h==INVALID_HANDLE_VALUE)return -1;
+ while(total<(DWORD)cap&&ReadFile(h,buf+total,(DWORD)cap-total,&got,NULL)&&got)total+=got;
+ CloseHandle(h);return (int)total;}
+void mb_plat_free(void *p){if(p)HeapFree(GetProcessHeap(),0,p);}
 
 /* ---- window ---- */
 static void mkdib(int w,int h){
