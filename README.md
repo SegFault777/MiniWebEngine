@@ -5,7 +5,7 @@
 
 A small, zero-dependency HTML5 + CSS3 rendering engine written in C99.
 
-**Current version: v0.12** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
+**Current version: v0.13** - large HTML5 / CSS3 subset (flexbox, grid, tables, floats, `@media`,
 `var()`, `calc()`, gradients, rounded corners, shadows) **plus a JavaScript subset**: an ECMAScript
 interpreter with a garbage-collected heap, regular expressions, and DOM bindings (queries, mutation,
 events, timers).
@@ -54,6 +54,17 @@ under the SIL Open Font License 1.1 - see [NOTICE.md](NOTICE.md) and [fonts/READ
 Latin-only binary (about 0.3 MB; about 3.2 MB with Chinese and Korean).
 
 ![CJK test page](docs/cjk.png)
+
+## What is new in v0.13 - real coroutines, text selection, SVG images, lossless WebP
+
+- **`await` really suspends** (`src/mwe_js_async.h`): every async function and generator runs on its own C stack (1 MB, committed lazily; up to 128 live at once) with a few instructions of assembly for the switch (x86-64 System V: Linux, BSD, macOS/Intel). `await` registers a reaction on the promise and switches back to the caller; the reaction switches back in as a microtask. So an async function runs synchronously up to its first `await` and then yields exactly like a browser, timers/rendering/input keep running while a `fetch()` is pending (test: 1.2 s `await fetch()`, longest `mb_tick` 3 ms), and the microtask ordering matches Node (`tests/js/coro.js`, 51 lines, byte-identical to Node's output, also under GC stress and ASan). Generators are lazy (`next(v)` sends values, `return()`/`throw()` with `finally`, `yield*`, infinite generators, `for...of` closes them on `break`), async generators and `for await` work, `Map`/`Set` accept generators. The GC scans every coroutine stack; suspended generators that nobody references are reclaimed. **On other CPUs (ARM, Windows) the v0.12 behaviour remains** (await pumps the event loop, generators run eagerly): the engine detects this at compile time (`JCO_ASM`).
+- **Text selection and clipboard** (`src/mwe_select.h`, `mb_mouse_*`, `mb_key_ex`): drag to select page text, double-click a word, triple-click a line, Shift+arrows (also Home/End), Ctrl+A, Ctrl+C / Ctrl+X / Ctrl+V; highlighted behind the glyphs; copied text keeps line and paragraph breaks and word spacing. Form fields have their own selection (drag, double-click word, triple-click all, Shift+arrows, Ctrl+Left/Right by word, typing replaces it, cut/copy/paste). Dragging past the window edge scrolls. A drag never follows a link. Platform side: `mb_plat_clipboard_set/get` (headless host: in-memory; Win32: `CF_UNICODETEXT`, **not compiled here**).
+- **SVG images**: `<img src="x.svg">`, `data:image/svg+xml` (base64 or percent-encoded) and CSS `url(x.svg)` use the SVG rasterizer (drawn on white and on black to recover the alpha channel). Intrinsic size from width/height, else viewBox, else 300x150.
+- **WebP lossless** (VP8L) is decoded bit-exactly (all transforms, colour cache, meta prefix codes, alpha), including the first frame of an animation placed on its canvas; the browser now advertises `image/webp`. **Lossy WebP (VP8) and AVIF are NOT supported yet** (they show as broken images).
+- Fixed: `Map`/`Set` constructors ignored generators and other iterables; `for...of` over generators/iterators was eager.
+- Tests: `tests/js/coro.js` (+ GC stress), network suite 42 cases (await-UI, 13 selection/clipboard cases), WebP cases in `tests/img/run.py` (nine exact comparisons with Pillow, palette-size fuzz, 400 corrupted files under ASan/UBSan).
+
+**Not done (next)**: lossy WebP (VP8), AVIF, CSS `animation`/`transition`/`@keyframes`, rotate/scale/matrix transforms, animated GIF/WebP playback (first frame only), progressive JPEG, coroutines on ARM/Windows, Ctrl+Left/Right word moves in page text.
 
 ## What is new in v0.12 - memory, no C library, SVG, sticky, transform
 
@@ -195,7 +206,7 @@ Scripts run once, after the whole document is parsed (like `defer`); `mwe_js_run
 without scripts. The CLI runs the scripts, advances virtual time by one second (so `setTimeout` callbacks
 fire), prints `console.log` output to stderr, and then renders.
 
-## Supported (v0.12)
+## Supported (v0.13)
 
 **HTML5** - tags, attributes, comments, implied end tags (`p`, `li`, `dt`/`dd`, `tr`/`td`/`th`,
 `thead`/`tbody`/`tfoot`, `option`), void elements, raw-text elements (`style`, `script`, `textarea`),

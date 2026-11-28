@@ -2,7 +2,7 @@
 /* MiniBrowser core <-> platform interface. The core is portable C with no OS calls. */
 #ifndef MB_H
 #define MB_H
-#define MB_VERSION "0.12"
+#define MB_VERSION "0.13"
 
 /* ---- implemented by the platform layer (mb_win32.c, mb_shot.c) ---- */
 /* Non-blocking TCP sockets (v0.10). Nothing in the core ever waits on the network; the platform layer must
@@ -15,6 +15,8 @@ void mb_plat_close(int h);                              /* safe at any time, als
 int  mb_plat_readfile(const char *path, char *buf, int cap);   /* bytes read (0..cap), or -1 if it cannot be opened */
 void *mb_plat_alloc(unsigned long n);                   /* zero-filled memory (calloc-style, lazily committed), or NULL */
 void mb_plat_free(void *p);
+void mb_plat_clipboard_set(const char *utf8, int n);       /* put text on the system clipboard */
+int  mb_plat_clipboard_get(char *buf, int cap);              /* bytes of UTF-8 text on the clipboard (0 if none), at most cap */
 void mb_plat_idle(int ms);                              /* sleep up to ms (only used while a script awaits the network) */
 void mb_plat_random(unsigned char *buf, int n);         /* cryptographically secure bytes */
 long long mb_plat_time(void);                           /* seconds since 1970-01-01 UTC */
@@ -53,7 +55,13 @@ enum { MBK_BACKSPACE = 1, MBK_DELETE, MBK_ENTER, MBK_LEFT, MBK_RIGHT, MBK_HOME, 
 void mb_init(const char *start_url, int w, int h);
 void mb_resize(int w, int h);
 void mb_draw(unsigned *px);                 /* full window, w*h pixels, 0x00RRGGBB */
-void mb_click(int x, int y);
+void mb_click(int x, int y);                         /* press + release without moving (headless tests; windows use the three below) */
+void mb_mouse_down(int x, int y, int clicks);         /* left button down; clicks = 1, 2 (double) or 3 (triple) */
+void mb_mouse_drag(int x, int y);                     /* the mouse moved with the left button held */
+void mb_mouse_up(int x, int y);
+#define MBMOD_SHIFT 1
+#define MBMOD_CTRL 2
+void mb_key_ex(int k, int mods);                      /* k: an MBK_* code, or a letter when Ctrl is held (a c x v l) */
 void mb_move(int x, int y);
 void mb_wheel(int notches);                 /* >0 scrolls up */
 void mb_key(int k);

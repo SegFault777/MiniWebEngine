@@ -5,6 +5,7 @@
 #include "mwe_js.h"
 #include "mwe_forms.h"
 #include "mwe_svg.h"
+#include "mwe_select.h"
 
 /* ---- public API ---- */
 static void mem_doc_free(void){
@@ -23,7 +24,7 @@ int mwe_load(char*html,int len){
  imfreeall();
  nims=0;ipn=0;xpn=0;
  if(len>=3&&(u8)html[0]==0xEF&&(u8)html[1]==0xBB&&(u8)html[2]==0xBF){html+=3;len-=3;}  /* UTF-8 byte order mark */
- focn=0;focpos=0;ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
+ focn=0;focpos=0;fanc=-1;mwe_sel_clear();ap=0;full=0;nr=0;nnot=0;rdirty=0;ttl.n=0;ttl.p=0;nss=0;nc=0;nbx=0;nclp=0;
  for(i=0;i<4;i++)qb[i]=(i&1)?(1<<30):0;
  css((S){(char*)UA,sl(UA)});
  jready=0;jnscr=0;jlevel=0;jrec=1;
@@ -57,7 +58,7 @@ int mwe_layout(int width){
  if(width<16)width=16;
  W=VW=width;
  restyle();
- nc=0;nbx=0;nclp=0;nf=0;nab=0;scp=0;Y=0;pend=0;LH=LA=LD=0;lx=lsx=cx=0;cw=W;lend=W;lf=0;ca=0;sp=0;bulp=0;curh=0;curop=255;curcl=0;curz=curz2=curctx=0;nsk=cursk=0;isol=0;fw=fh=-1;fva=0;fch=-1;ng=0;padp=0;tip=0;
+ nc=0;nbx=0;nclp=0;nf=0;nab=0;scp=0;Y=0;pend=0;LH=LA=LD=0;lx=lsx=cx=0;cw=W;lend=W;lf=0;ca=0;sp=0;bulp=0;curh=0;curop=255;curcl=0;curz=curz2=curctx=0;nsk=cursk=0;tord=0;isol=0;fw=fh=-1;fva=0;fch=-1;ng=0;padp=0;tip=0;
  walk(root);nl();
  {int ey=Y+pend;doabs();Y=ey;pend=0;}
  zsort();
@@ -98,6 +99,7 @@ void mwe_paint(unsigned*buf,int stride,int x,int y,int w,int h){
    case 0:fr(k->x,k->y,k->w,k->h,k->c);break;
    case 1:
     if(k->bg>=0)fr(k->x,k->y,k->w,k->h,k->bg);
+    sel_hl(k);
     if(k->tsx||k->tsy)run(k->x+k->tsx,k->y+k->a+k->tsy,k->t,k->n,k->fs,k->tf,k->ls,k->tsc,0,k->w);
     if(k->tov&&k->x<kx1&&k->x+k->w>kx1){   /* text-overflow: ellipsis -- the part that does not fit is replaced by an ellipsis */
      static const char el[]="\xE2\x80\xA6";

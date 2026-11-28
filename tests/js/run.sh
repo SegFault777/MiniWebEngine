@@ -11,7 +11,7 @@ mkdir -p "$OUT"
 $CC -std=c99 -O1 -o "$OUT/mwe" mwe.c
 $CC -std=c99 -O1 -o "$OUT/jt" tests/jt.c
 fail=0
-for n in lang numbers accessors regex iter modern async; do
+for n in lang numbers accessors regex iter modern async coro; do
   { echo '<html><body><script>'; cat $T/$n.js; echo '</script></body></html>'; } > "$OUT/$n.html"
   "$OUT/mwe" "$OUT/$n.html" "$OUT/x.bmp" > "$OUT/$n.got" 2>&1 || true
   if cmp -s "$OUT/$n.got" $T/$n.out; then echo "ok   $n"; else echo "FAIL $n"; diff "$OUT/$n.got" $T/$n.out | head -10; fail=1; fi

@@ -21,6 +21,7 @@ chk("z-index: z1 above z0",px("zindex.html",400,[(60,50)])[:1],[(255,0,0)])
 chk("z-index: nested context (z2 inside z5) above z3",px("zindex.html",400,[(260,100),(215,40)]),[(255,170,0),(0,0,255)])
 chk("transform: translate px, %, X/Y",px("transform.html",500,[(50,25),(150,130),(50,130),(60,200)]),[(204,204,204),(0,170,0),(255,255,255),(0,0,255)])
 chk("svg: rounded rect, circle, star path, currentColor",px("svg.html",420,[(30,70),(98,73),(180,60),(61,134)]),[(204,0,0),(0,0,255),(255,170,0),(0,0,0)])
+chk("svg as image: <img>, utf8 data URI (scaled), CSS background; alpha keeps the page colour",px("svgimg.html",520,[(30,100),(5,5),(140,70),(280,100)]),[(219,77,67),(255,255,221),(219,77,67),(219,77,67)])
 sys.exit(0 if ok else 1)
 PY
 "$D/sticky" > "$D/sticky.got"

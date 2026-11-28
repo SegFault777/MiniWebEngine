@@ -1,0 +1,51 @@
+before
+a1 start
+after call
+sync end
+a7 s
+a8 s
+g 0 1 10 11
+got hi
+cleanup
+1 2 {"value":9,"done":true} {"done":true}
+cleanup
+throw -> inj
+inner got X
+outer r iret
+i1 10 20 {"done":true}
+v 1
+v 2
+closed
+0,1,2,3,4
+1-2
+2
+script end
+a1 after await
+micro 1
+a2 1
+t1
+caught boom
+finally
+leaf 2
+then a1 done
+micro 2
+a2 2
+t2
+a3 -> 7
+a4 rejected TypeError
+leaf 3
+t3
+a5 0,1,2
+leaf 1
+many 100 99
+a2 3
+t4
+t5
+a6 2,4,6
+for await 0,1,2
+{"value":0,"done":false} {"value":"r","done":true} {"done":true}
+deep 60
+timer 15
+a7 20
+a8 25
+a7 30

@@ -133,3 +133,76 @@ void mb_key(int k){
  else if(k==MBK_HOME)sy=0;else if(k==MBK_END)sy=mx;
  if(sy>mx)sy=mx;
  if(sy<0)sy=0;}
+
+/* ---- mouse selection, Ctrl shortcuts, Shift+arrows (v0.13) ---- */
+static int pdown,pdrag,pdx,pdy,pclicks;
+#define jdirty_check_() 0
+static void clip_put(const char*t,int n){if(n>0)mb_plat_clipboard_set(t,n);}
+void mb_mouse_down(int x,int y,int clicks){
+ int chh=Ht-TB-SBH;
+ (void)chh;
+ pdown=0;pdrag=0;
+ if(!(ready&&x<Wd-SBW&&y>=TB&&y<Ht-SBH)){mb_click(x,y);return;}   /* toolbar, address bar, scroll bar: plain click */
+ uf=0;secpanel=0;
+ pdown=1;pdx=x;pdy=y;pclicks=clicks;
+ if(mwe_mouse_down(x,y-TB+sy,clicks))relayout();   /* a field: caret and focus ring need a new layout */
+ else if(jdirty_check_())relayout();}
+void mb_mouse_drag(int x,int y){
+ int dx=x-pdx,dy=y-pdy,chh=Ht-TB-SBH,mx;
+ if(!pdown)return;
+ if(!pdrag&&dx*dx+dy*dy<16)return;
+ pdrag=1;
+ mx=ph-chh;if(mx<0)mx=0;
+ if(y<TB+6){sy-=24;if(sy<0)sy=0;}else if(y>Ht-SBH-6){sy+=24;if(sy>mx)sy=mx;}   /* drag past the edge: scroll */
+ want_sy=-1;
+ if(mwe_mouse_drag(x<0?0:x,y-TB+sy))relayout();}
+void mb_mouse_up(int x,int y){
+ int was=pdown,dragged=pdrag,cl=pclicks;
+ pdown=pdrag=0;
+ mwe_mouse_up();
+ if(!was)return;
+ if(!dragged&&cl<=1)mb_click(x,y);   /* an ordinary click: links, buttons, checkboxes, caret in fields */}
+static void sel_scroll_to_focus(void){
+ int fy=mwe_sel_focus_y(),chh=Ht-TB-SBH,mx=ph-chh;
+ if(fy<0)return;
+ if(mx<0)mx=0;
+ if(fy<sy)sy=fy;else if(fy+20>sy+chh)sy=fy+20-chh;
+ if(sy>mx)sy=mx;
+ if(sy<0)sy=0;
+ want_sy=-1;}
+void mb_key_ex(int k,int mods){
+ int shift=mods&MBMOD_SHIFT,ctrl=mods&MBMOD_CTRL,fk=ready?mwe_focus_kind():0;
+ const char*kn=0;
+ if(ctrl){
+  switch(lw(k)){
+  case 'a':
+   if(uf){usel=1;return;}
+   if(fk==1||fk==2){mwe_field_select_all();return;}
+   if(ready)mwe_sel_all();
+   return;
+  case 'c':case 'x':{
+   int n=0;const char*t;
+   if(uf){clip_put(ub,len(ub));if(lw(k)=='x'){ub[0]=0;ucur=0;usel=0;}return;}
+   if(!ready)return;
+   t=mwe_selection(&n);
+   clip_put(t,n);
+   if(lw(k)=='x'&&n>0&&fk&&!(mwe_event_key("keydown","x")&2)){mwe_input_key("Backspace");relayout();formpoll();}
+   return;}
+  case 'v':{
+   static char cb[1<<16];
+   int n=mb_plat_clipboard_get(cb,(int)sizeof cb-1);
+   if(n>0)mb_paste(cb,n);
+   return;}
+  case 'l':mb_key(MBK_FOCUS_URL);return;
+  default:break;}
+  if(k<32||k>=128)mb_key(k);   /* Ctrl+Home etc. */
+  return;}
+ if(k==MBK_LEFT)kn="ArrowLeft";else if(k==MBK_RIGHT)kn="ArrowRight";else if(k==MBK_UP)kn="ArrowUp";else if(k==MBK_DOWN)kn="ArrowDown";
+ else if(k==MBK_HOME)kn="Home";else if(k==MBK_END)kn="End";
+ if(shift&&kn&&!uf){
+  if(fk==1||fk==2){if(mwe_input_key_ex(kn,MBMOD_SHIFT)&1)relayout();return;}
+  if(ready){
+   if(!mwe_sel_has_caret())mwe_sel_begin(0,sy,1);   /* no caret yet: start at the top of the view */
+   if(mwe_sel_key(kn,mods))sel_scroll_to_focus();}
+  return;}
+ mb_key(k);}

@@ -47,7 +47,7 @@ static void focus_set(N*n){
   if(fchg&&fkind(old)!=3)fev(old,"change",1);
   fchg=0;
   fev(old,"blur",0);}
- focn=n;focpos=0;
+ focn=n;focpos=0;fanc=-1;
  if(n){
   if(fkind(n)==1||fkind(n)==2){S v=fget(n);focpos=v.n;}
   fev(n,"focus",0);}
@@ -59,7 +59,17 @@ static int fprev(S v,int p){if(p<=0)return 0;p--;while(p>0&&((unsigned char)v.p[
 static int fnext(S v,int p){if(p>=v.n)return v.n;p++;while(p<v.n&&((unsigned char)v.p[p]&0xC0)==0x80)p++;return p;}
 static int fcps(S v,int upto){int i=0,k=0;while(i<upto&&i<v.n){u8d(v.p,v.n,&i);k++;}return k;}
 
-/* insert text at the caret; returns 1 if the value changed */
+static int fselr(int*a,int*b){if(fanc<0||fanc==focpos)return 0;*a=fanc<focpos?fanc:focpos;*b=fanc<focpos?focpos:fanc;return 1;}
+/* selected text of the focused field (for copy / cut) */
+const char*mwe_field_text(int*len){
+ S v;int a,b;
+ *len=0;
+ if(!focn||(fkind(focn)!=1&&fkind(focn)!=2)||!fselr(&a,&b))return "";
+ v=fget(focn);if(b>v.n)b=v.n;
+ if(a>=b)return "";
+ *len=b-a;return v.p+a;}
+void mwe_field_select_all(void){if(focn&&(fkind(focn)==1||fkind(focn)==2)){S v=fget(focn);fanc=0;focpos=v.n;jdirty=1;}}
+/* insert text at the caret (replacing the selection); returns 1 if the value changed */
 static int fins(const char*s,int n){
  N*t=focn;S v;char b[8200];int i,o=0,k,num,ml=-1,room,cps;
  if(!t||fdis(t)||fro(t))return 0;
@@ -67,6 +77,12 @@ static int fins(const char*s,int n){
  if(k!=1&&k!=2)return 0;
  v=fget(t);
  if(focpos>v.n)focpos=v.n;
+ {int sa,sb;if(fselr(&sa,&sb)){   /* typing over a selection removes it first */
+   char tmp[8200];int q,o2=0;
+   if(sb>v.n)sb=v.n;
+   for(q=0;q<sa;q++)tmp[o2++]=v.p[q];
+   for(q=sb;q<v.n&&o2<8100;q++)tmp[o2++]=v.p[q];
+   fset(t,(S){tmp,o2});v=fget(t);focpos=sa;fanc=-1;}}
  num=k==1&&seq(getattr(t,"type"),"number");
  {S m=getattr(t,"maxlength");if(m.p&&m.n){ml=0;for(i=0;i<m.n&&isdg(m.p[i]);i++)ml=ml*10+m.p[i]-'0';}}
  if(v.n+n>8000)n=8000-v.n>0?8000-v.n:0;
@@ -93,7 +109,8 @@ static int fdel(int fwd){
  N*t=focn;S v;char b[8200];int a,e,i,o=0;
  if(!t||fdis(t)||fro(t))return 0;
  v=fget(t);if(focpos>v.n)focpos=v.n;
- if(fwd){a=focpos;e=fnext(v,focpos);}else{a=fprev(v,focpos);e=focpos;}
+ if(fselr(&a,&e)){if(e>v.n)e=v.n;fanc=-1;}
+ else if(fwd){a=focpos;e=fnext(v,focpos);}else{a=fprev(v,focpos);e=focpos;}
  if(a==e||v.n>8000)return 0;
  for(i=0;i<a;i++)b[o++]=v.p[i];
  for(i=e;i<v.n;i++)b[o++]=v.p[i];
@@ -181,29 +198,65 @@ int mwe_form_submit(const char**method,const char**action,const char**data,int*d
  fspend=0;*method=fsm[0]=='P'?"POST":"GET";*action=fsa;*data=fsd;*dlen=sl(fsd);
  return 1;}
 
-/* ---- caret placement from a click ---- */
-static void fcaretat(N*n,int x){
- int i;
- if(fkind(n)!=1)return;
+/* byte offset of a displayed text run inside the field's displayed text (the runs are words/lines cut out of that text, in order) */
+static int fdisp_off(N*field,Cmd*target){
+ int i,pos=0;
  for(i=0;i<nc;i++){
   Cmd*c=&cm[i];
-  if(c->k!=1||!c->on||c->on->gen!=3||c->on->par!=n||!c->t)continue;
-  {S v=fget(n);int j=0,cpi=0,cur=fcps(v,focpos<=v.n?focpos:v.n),pw=seq(getattr(n,"type"),"password"),vi=0,best=v.n;
-   (void)pw;
-   /* c->t is the displayed text (value with a '|' at the old caret); find the codepoint boundary closest to x */
-   while(j<=c->n){
-    int w=wid(c->t,j,c->fs,c->tf,c->ls),nx=j;
-    if(c->x+w>=x){best=cpi;break;}
-    if(j>=c->n){best=cpi;break;}
-    u8d(c->t,c->n,&nx);j=nx;cpi++;}
-   /* the displayed '|' occupies one codepoint at index `cur` */
-   if(best>cur)best--;
-   for(vi=0;best>0&&vi<v.n;best--)vi=fnext(v,vi);
-   focpos=vi;}
-  return;}}
+  S d;
+  if(c->k!=1||!c->t||!c->on||c->on->gen!=3||c->on->par!=field)continue;
+  d=c->on->txt;
+  while(pos+c->n<=d.n){int q,ok=1;for(q=0;q<c->n;q++)if(d.p[pos+q]!=c->t[q]){ok=0;break;}if(ok)break;pos++;}
+  if(c==target)return pos;
+  pos+=c->n;}
+ return -1;}
+/* ---- caret placement from a click: map x/y onto the displayed text of the field, then back to a value offset ---- */
+static void fcaretat(N*n,int x,int y){
+ int i,k=fkind(n),best=-1,bd=1<<30;
+ S v;int pw,hascaret,fd;
+ if(k!=1&&k!=2)return;
+ v=fget(n);pw=k==1&&seq(getattr(n,"type"),"password");
+ hascaret=!(fanc>=0&&fanc!=focpos);
+ for(i=0;i<nc;i++){   /* the displayed run nearest to the click (rows first) */
+  Cmd*c=&cm[i];int dy,dx,d;
+  if(c->k!=1||!c->t||!c->on||c->on->gen!=3||c->on->par!=n)continue;
+  dy=y<c->y?c->y-y:y>=c->y+c->h?y-(c->y+c->h-1):0;
+  dx=x<c->x?c->x-x:x>c->x+c->w?x-c->x-c->w:0;
+  d=dy*4096+dx;
+  if(d<bd){bd=d;best=i;}}
+ if(best<0){focpos=v.n;return;}
+ {Cmd*c=&cm[best];int j=0,off,D,cpi=0;
+  while(j<c->n){int q=j,w0=wid(c->t,j,c->fs,c->tf,c->ls),w1;u8d(c->t,c->n,&q);w1=wid(c->t,q,c->fs,c->tf,c->ls);if(c->x+(w0+w1)/2>x)break;j=q;}
+  off=fdisp_off(n,c);
+  if(off<0)off=0;
+  off+=j;
+  fd=pw?fcps(v,focpos<=v.n?focpos:v.n)*3:focpos;   /* where the caret character '|' sits in the displayed text */
+  D=off;
+  if(hascaret&&D>fd)D--;                           /* the '|' is not part of the value */
+  if(pw){cpi=D/3;D=0;while(cpi>0&&D<v.n){D=fnext(v,D);cpi--;}}
+  focpos=D>v.n?v.n:D<0?0:D;}}
+
+/* mouse in a field: mode 0 = press (focus, caret, anchor), 1 = drag (extend), 2 = double click (word); returns 1 if (x,y) is in an editable field */
+static N*fat(int x,int y){   /* editable control under a document point (its box = the box of its Cmds), or 0 */
+ N*n=jhit(x,y);
+ while(n&&n!=root&&!fkind(n))n=n->par;
+ return n&&n!=root&&(fkind(n)==1||fkind(n)==2)&&!fdis(n)?n:0;}
+int mwe_field_mouse(int x,int y,int mode){
+ N*n=fat(x,y);
+ if(mode==0){
+  if(!n){focus_set(0);return 0;}
+  if(n!=focn)focus_set(n);
+  fcaretat(n,x,y);fanc=focpos;return 1;}
+ if(!focn)return 0;
+ if(mode==1){fcaretat(focn,x,y);return 1;}
+ if(mode==2&&n==focn){S v=fget(n);int a=focpos,b=focpos;
+  while(a>0&&v.p[a-1]!=' '&&v.p[a-1]!='\n')a--;
+  while(b<v.n&&v.p[b]!=' '&&v.p[b]!='\n')b++;
+  fanc=a;focpos=b;return 1;}
+ return 0;}
 
 /* ---- called from mwe_event_click for clicks that no script prevented; returns bit 1 when the page changed ---- */
-static int form_click(N*t,int x){
+static int form_click(N*t,int x,int y){
  N*q=t;int k;
  while(q&&q!=root&&!fkind(q))q=q->par;
  if(q&&q!=root&&fkind(q)){
@@ -217,7 +270,7 @@ static int form_click(N*t,int x){
    return 1;}
   if(k==3){focus_set(q);fselcycle(q,1);return 1;}
   focus_set(q);
-  fcaretat(q,x);
+  fcaretat(q,x,y);fanc=-1;
   return 1;}
  if(focn){focus_set(0);return 1;}
  return 0;}
@@ -226,8 +279,8 @@ static int form_click(N*t,int x){
 int mwe_input_text(const char*s,int n){
  if(!focn)return 0;
  return fins(s,n)?1:0;}
-int mwe_input_key(const char*key){   /* bit 1: page changed; bit 8: focus moved off the page (Tab past the last control) */
- N*t=focn;S v;int k,r=0;
+int mwe_input_key_ex(const char*key,int mods){   /* mods: 1 shift (extend the selection), 2 ctrl. bit 1: page changed; bit 8: focus moved off the page (Tab past the last control) */
+ N*t=focn;S v;int k,r=0,shift=mods&1,sa,sb,had;
  if(!t)return 0;
  k=fkind(t);
  if(!strcmp_k(key,"Tab")||!strcmp_k(key,"ShiftTab")){
@@ -250,10 +303,20 @@ int mwe_input_key(const char*key){   /* bit 1: page changed; bit 8: focus moved 
  v=fget(t);if(focpos>v.n)focpos=v.n;
  if(!strcmp_k(key,"Backspace"))return fdel(0);
  if(!strcmp_k(key,"Delete"))return fdel(1);
- if(!strcmp_k(key,"ArrowLeft")){focpos=fprev(v,focpos);r=1;}
- else if(!strcmp_k(key,"ArrowRight")){focpos=fnext(v,focpos);r=1;}
- else if(!strcmp_k(key,"Home")){if(k==2){while(focpos>0&&v.p[focpos-1]!='\n')focpos--;}else focpos=0;r=1;}
- else if(!strcmp_k(key,"End")){if(k==2){while(focpos<v.n&&v.p[focpos]!='\n')focpos++;}else focpos=v.n;r=1;}
+ had=fselr(&sa,&sb);
+ if(shift&&fanc<0&&(key[0]=='A'||key[0]=='H'||key[0]=='E'))fanc=focpos;   /* Arrow*, Home, End */   /* start a selection at the caret */
+ if(!strcmp_k(key,"ArrowLeft")){
+  if(!shift&&had){focpos=sa;}
+  else if(mods&2){int p=focpos;while(p>0&&v.p[p-1]==' ')p--;while(p>0&&v.p[p-1]!=' '&&v.p[p-1]!='\n')p--;focpos=p;}   /* Ctrl+Left: word */
+  else focpos=fprev(v,focpos);
+  r=1;}
+ else if(!strcmp_k(key,"ArrowRight")){
+  if(!shift&&had){focpos=sb;}
+  else if(mods&2){int p=focpos;while(p<v.n&&v.p[p]==' ')p++;while(p<v.n&&v.p[p]!=' '&&v.p[p]!='\n')p++;focpos=p;}
+  else focpos=fnext(v,focpos);
+  r=1;}
+ else if(!strcmp_k(key,"Home")){if(k==2&&!(mods&2)){while(focpos>0&&v.p[focpos-1]!='\n')focpos--;}else focpos=0;r=1;}
+ else if(!strcmp_k(key,"End")){if(k==2&&!(mods&2)){while(focpos<v.n&&v.p[focpos]!='\n')focpos++;}else focpos=v.n;r=1;}
  else if(k==2&&(!strcmp_k(key,"ArrowUp")||!strcmp_k(key,"ArrowDown"))){
   int ls=focpos,col,i;
   while(ls>0&&v.p[ls-1]!='\n')ls--;
@@ -270,5 +333,7 @@ int mwe_input_key(const char*key){   /* bit 1: page changed; bit 8: focus moved 
  else if(!strcmp_k(key,"Enter")){
   if(k==2)return fins("\n",1);
   {N*f=fform(t);if(f){fsubmit(f,0);r=1;}}}
+ if(r&&!shift)fanc=-1;
  if(r)jdirty=1;
  return r;}
+int mwe_input_key(const char*key){return mwe_input_key_ex(key,0);}

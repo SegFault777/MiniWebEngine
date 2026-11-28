@@ -61,9 +61,34 @@ t "form: type text (UTF-8), edit with Left, Enter submits GET" "echo GET q=hello
 t "form: Backspace edits at the caret" "echo GET q=ac&" $U/form.html $D/o.bmp 700 300 --click 60 55 --type "abc" --press Left --press Backspace --press Enter
 t "form: select cycles on click, submit button adds its name" "s=a&go=Go" $U/form.html $D/o.bmp 700 300 --click 60 55 --type "x" --click 230 55 --click 280 55
 t "form: POST with textarea (newline as CRLF) and urlencoded content type" "t=hi+there%0D%0A%21&u=x+y | application/x-www-form-urlencoded" $U/form.html $D/o.bmp 700 300 --click 60 100 --type " there" --press Enter --type "!" --click 400 120
+# await really suspends (v0.13): the page keeps running (timers fire, ticks stay short) while an awaited fetch is pending
+out=$("$D/mb" $U/await_ui.html $D/o.bmp 600 300 --trace 2>&1)
+printf '%s' "$out" | grep -q "main script returned" && printf '%s' "$out" | grep -q "awaited ok=1 ticks-during-wait=many" && { pass=$((pass+1)); echo "PASS  await fetch(): timers kept firing during the 1.2 s wait"; } || { fail=$((fail+1)); echo "FAIL  await did not suspend"; printf '%s\n' "$out" | head -4; }
+mt=$(num "$out" maxtick); [ "${mt:-999}" -lt 100 ] && { pass=$((pass+1)); echo "PASS  longest mb_tick ${mt}ms while awaiting (UI not blocked)"; } || { fail=$((fail+1)); echo "FAIL  maxtick ${mt} during await"; }
 # cookies (v0.11)
 t "cookies: Set-Cookie stored and sent (Secure refused on http, bad Domain refused, HttpOnly sent)" "Cookie: sid=abc123; pref=dark; secret=hid; gone=1" $U/setck $D/o.bmp 400 200 --goto $U/ck
 t "cookies: Path restricts where a cookie is sent" "gone=1; narrow=x" $U/setck $D/o.bmp 400 200 --goto $U/only/ck
 t "cookies: Max-Age=0 deletes" "Cookie: sid=abc123; pref=dark; secret=hid" $U/setck $D/o.bmp 400 200 --goto $U/delck --goto $U/ck
 t "cookies: document.cookie hides HttpOnly, scripts can set (not HttpOnly), fetch() sends them" "fetch saw Cookie: sid=abc123; pref=dark; secret=hid; gone=1; fromjs=7" $U/setck $D/o.bmp 400 200 --goto $U/jsck.html
+# text selection and clipboard (v0.13): page text (drag, word, line, Ctrl+A, Shift+arrows) and fields (drag, Shift+Home, cut/paste)
+cat > "$D/sel.html" <<HTML
+<html><body style="margin:8px;font-size:18px"><h1>Selection test</h1>
+<p>The quick brown fox jumps over the lazy dog. Second sentence continues on the same paragraph, long enough to wrap onto another line in a narrow window.</p>
+<p>Another paragraph with <b>bold words</b> and a <a href="$U/ok.html">link text</a> inside.</p>
+<input id=f value="hello field value" style="width:260px"><br><textarea style="width:260px;height:60px">line one
+line two</textarea></body></html>
+HTML
+SEL="file://$D/sel.html"
+t "select: drag over page text copies it" "clipboard: lection test\\nThe quick brown fox jumps o" $SEL $D/o.bmp 460 560 --drag 40 120 250 150 --press C-c --clip
+t "select: double-click = word" "clipboard: Selection" $SEL $D/o.bmp 460 560 --dblclick 100 120 --press C-c --clip
+t "select: triple-click = line" "clipboard: Selection test" $SEL $D/o.bmp 460 560 --tripleclick 100 120 --press C-c --clip
+t "select: Ctrl+A copies all page text (wrapped lines, paragraphs)" "inside.\\n\\nline one\\nline two" $SEL $D/o.bmp 460 560 --press C-a --press C-c --clip
+t "select: Shift+Right extends from the clicked caret" "clipboard: Selec" $SEL $D/o.bmp 460 560 --click 40 120 --press S-Right --press S-Right --press S-Right --press S-Right --press S-Right --press C-c --clip
+t "select: Shift+Down" "clipboard: Selection test" $SEL $D/o.bmp 460 560 --click 40 120 --press S-Down --press C-c --clip
+t "select: a link is not followed after a drag" "title: file" $SEL $D/o.bmp 460 560 --drag 200 275 330 275
+t "field: drag selects inside the input" "clipboard: llo field val" $SEL $D/o.bmp 460 560 --drag 30 350 110 350 --press C-c --clip
+t "field: Ctrl+A, typing replaces the selection" "clipboard: NEW" $SEL $D/o.bmp 460 560 --click 60 350 --press C-a --type NEW --press C-a --press C-c --clip
+t "field: Shift+Home selects to the line start" "clipboard: hello field val" $SEL $D/o.bmp 460 560 --click 120 350 --press S-Home --press C-c --clip
+t "field: cut then paste" "clipboard: PASTED" $SEL $D/o.bmp 460 560 --click 60 350 --press C-a --press C-x --setclip PASTED --press C-v --press C-a --press C-c --clip
+t "field: double-click selects a word" "clipboard: hello" $SEL $D/o.bmp 460 560 --dblclick 40 350 --press C-c --clip
 echo "net tests: $pass passed, $fail failed"; [ $fail -eq 0 ]

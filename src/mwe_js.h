@@ -1,5 +1,5 @@
 /* ===================================================================================
- * MiniWebEngine JavaScript subset (v0.12)
+ * MiniWebEngine JavaScript subset (v0.13)
  * Tree-walking interpreter, mark/sweep heap (collected between events), DOM bindings.
  * No libc, no malloc, no libm. Strings are UTF-8; length/index/slice count code points.
  * ================================================================================== */
@@ -30,6 +30,8 @@ static ju64*jbm;            /* one bit per 8 bytes: set where a block starts (in
 static int jtop,joom,jgcn,jlimit=JHEAP-(512<<10),jgcok,jingc;
 static long jallocd,jthresh=4<<20;
 static char*jstackbase;
+static char*jstklim;
+static int jgenret;                    /* a generator is being closed by return(): catch blocks must not stop that unwinding */                 /* lowest address the running coroutine stack may reach (0 on the main stack) */
 static JHd*jfree[130],*jbig;
 static JOb jdmyo;
 static void jgc(void);
@@ -343,7 +345,7 @@ static JOb*jwrap[JMAXWRAP];static int jnw;
 static JV jstorev[2];
 static JV jexv,jrv;
 static JOb*jroot2[8];
-static JOb*jmicroq,*junh,*jPromProto,*jGenProto,*jgencur;
+static JOb*jmicroq,*junh,*jPromProto,*jGenProto,*jAGenProto,*jgencur;
 #define JFCB 64
 static const char*(*jcookie_get)(void);static void(*jcookie_set)(const char*);   /* document.cookie hooks (host) */
 static JV jfcb[JFCB];                 /* script callbacks of fetch()/XHR requests the host is still working on (GC roots) */
@@ -386,12 +388,18 @@ __attribute__((no_sanitize_address))
 #if defined(__GNUC__)
 __attribute__((noinline))
 #endif
-static void jscanstack(void){
- volatile char top;char*lo=(char*)&top,*hi=jstackbase;char**p;
- if(!hi)return;
+static void jscanrange(char*lo,char*hi){
+ char**p;
  for(p=(char**)((unsigned long)lo&~7UL);(char*)p<hi;p++){
   JHd*h=jfindblk(*p);
-  if(h&&!h->mk){h->mk=1;if(h->ty!=BT_STR){if(jsp<JSTK)jstk[jsp++]=h;else jmo=1;}}}
+  if(h&&!h->mk){h->mk=1;if(h->ty!=BT_STR){if(jsp<JSTK)jstk[jsp++]=h;else jmo=1;}}}}
+static void jco_scan_others(void);static int jco_cur_hi(char**hi);
+static int jco_gc_gens(void);static void jco_gc_free_dead(void);
+static void jscanstack(void){
+ volatile char top;char*lo=(char*)&top,*hi=0;
+ if(!jco_cur_hi(&hi))hi=jstackbase;
+ if(hi)jscanrange(lo,hi);
+ jco_scan_others();
  jdrain();}
 static void jgc(void){
  char*p,*end;JHd*h,*run;int i;unsigned rs;long live=0;
@@ -404,7 +412,7 @@ static void jgc(void){
  jmarkp(jErrProto);jmarkp(jDateProto);jmarkp(jNodeProto);jmarkp(jClsProto);jmarkp(jStyleProto);jmarkp(jDocProto);
  jmarkp(jErrT);jmarkp(jErrR);jmarkp(jErrS);jmarkp(jErrF);
  for(i=0;i<8;i++)jmarkp(jroot2[i]);
- jmarkp(jmicroq);jmarkp(junh);jmarkp(jPromProto);jmarkp(jGenProto);jmarkp(jgencur);
+ jmarkp(jmicroq);jmarkp(junh);jmarkp(jPromProto);jmarkp(jGenProto);jmarkp(jAGenProto);jmarkp(jgencur);
  for(i=0;i<JFCB;i++)jmarkv(jfcb[i]);
  for(i=0;i<jnlst;i++){jmarkp(jlst[i].type);jmarkv(jlst[i].fn);}
  for(i=0;i<jnt;i++){int k;jmarkv(jtm[i].fn);for(k=0;k<3;k++)jmarkv(jtm[i].a[k]);}
@@ -413,10 +421,13 @@ static void jgc(void){
  jmarkv(jexv);jmarkv(jrv);jmarkv(jrecv);
  jdrain();
  jscanstack();
- while(jmo){
-  jmo=0;p=(char*)jhp;end=p+jtop;
-  while(p<end){h=(JHd*)p;if(h->mk&&h->ty>=BT_OBJ)jscan(h);p+=h->sz;}
-  jdrain();}
+ for(;;){
+  while(jmo){
+   jmo=0;p=(char*)jhp;end=p+jtop;
+   while(p<end){h=(JHd*)p;if(h->mk&&h->ty>=BT_OBJ)jscan(h);p+=h->sz;}
+   jdrain();}
+  if(!jco_gc_gens())break;}   /* suspended generators are alive only while their generator object is */
+ jco_gc_free_dead();
  for(i=0;i<130;i++)jfree[i]=0;
  jbig=0;
  for(i=0;i<(int)(JHEAP/512);i++)jbm[i]=0;
@@ -1319,13 +1330,17 @@ static int jbindpat(JNd*p,JV v,JOb*env,int kind);
 static JV jevclass(JNd*c,JOb*env);
 static void jclassfields(JOb*cls,JV self);
 static JV jinitparent(JOb*par,JV self,JV*args,int argc);
-static JV jmkgen(JOb*fo,JV thisv,JV*args,int argc);static JOb*jpnew(void);static void jpsettle(JOb*p,int st,JV v);static JV jpresolve(JOb*p,JV x);
-static JV jcallfn0(JOb*fo,JV thisv,JV*args,int argc,int isnew);
+static int jlazy(JV coll,int async,JV*it,JV*nx,int*gen);static void jiterclose(JV it,int gen,int async);static JV jgen_step(JOb*g,int mode,JV val);
+static JV jmkgen(JOb*fo,JV thisv,JV*args,int argc);static JV jmkagen(JOb*fo,JV thisv,JV*args,int argc);static int jco_gc_gens(void);static void jco_gc_free_dead(void);static JOb*jpnew(void);static void jpsettle(JOb*p,int st,JV v);static JV jpresolve(JOb*p,JV x);
+static JV jcallfn0(JOb*fo,JV thisv,JV*args,int argc,int isnew);static int jco_start_async(JOb*fo,JV thisv,JV*args,int argc,JOb*p);
 static JV jcallfn(JOb*fo,JV thisv,JV*args,int argc,int isnew){   /* async functions return a promise, generator functions a generator object */
  JNd*f=fo->fn;
  if(!isnew&&f&&f->t==ND_FUNC&&(f->fl&(JF_ASYNC|JF_GEN))){
-  if(f->fl&JF_GEN)return jmkgen(fo,thisv,args,argc);
-  {JV r=jcallfn0(fo,thisv,args,argc,0);JOb*p=jpnew();
+  if(f->fl&JF_GEN)return (f->fl&JF_ASYNC)?jmkagen(fo,thisv,args,argc):jmkgen(fo,thisv,args,argc);
+  {JOb*p=jpnew();JV r;
+   if(jabort)return jundef();
+   if(jco_start_async(fo,thisv,args,argc,p))return jobj(p);   /* ran until its first await, on its own stack */
+   r=jcallfn0(fo,thisv,args,argc,0);
    if(jabort)return jundef();
    if(jthrow){JV e=jexv;jthrow=0;jpsettle(p,2,e);}else jpresolve(p,r);
    return jobj(p);}}
@@ -1336,6 +1351,7 @@ static JV jcallfn0(JOb*fo,JV thisv,JV*args,int argc,int isnew){
   if(!isnew)return jthrowerr(jErrT,"Class constructor cannot be invoked without 'new'");
   return jundef();}
  if(jdepth>=JMAXDEPTH)return jthrowerr(jErrR,"Maximum call stack size exceeded");
+ {volatile char sk;if(jstklim&&(char*)&sk<jstklim)return jthrowerr(jErrR,"Maximum call stack size exceeded");}
  jdepth++;
  env=jnewenv(fo->env);
  if(!(f->fl&JF_ARROW)){
@@ -1859,6 +1875,27 @@ static int jexec(JNd*s,JOb*env){
   case ND_FORIN:case ND_FOROF:{
    JV coll;JOb*keys=0,*arr=0;JStr*str=0;int i=0,n,kind=s->x?(s->op==0?0:s->op==1?1:2):3;JOb*it;
    coll=jev(s->b,env);if(jthrow)return JC_THROW;
+   if(s->t==ND_FOROF){   /* generators and custom iterators: pull one value at a time */
+    JV itv,nxv;int gen=0,asy=(s->fl&2)!=0;
+    if(jlazy(coll,asy,&itv,&nxv,&gen)){
+     if(jthrow)return JC_THROW;
+     for(;;){
+      JV res,x;JOb*e2;int close;
+      if(gen&&!asy)res=jgen_step(itv.u.o,0,jundef());else res=jcall(nxv,itv,0,0);
+      if(jthrow)return JC_THROW;
+      if(asy){res=jawait(res);if(jthrow)return JC_THROW;}
+      if(res.t!=JT_O){jthrowerr(jErrT,"iterator result is not an object");return JC_THROW;}
+      if(jtruthy(jget(res,jintc("done"))))break;
+      x=jget(res,jintc("value"));if(jthrow)return JC_THROW;
+      e2=(kind==1||kind==2)?jnewenv(env):env;
+      jbindpat(s->a,x,e2,kind);
+      if(jthrow){jiterclose(itv,gen,asy);return JC_THROW;}
+      c=jexec(s->c,e2);
+      close=c==JC_THROW||c==JC_RET||c==JC_BRK||(c==JC_CONT&&jlabel&&!(s->s&&jkeq(jlabel,s->s)));
+      if(close)jiterclose(itv,gen,asy);
+      JLOOPCTL(c,s)}
+     return 0;}
+    if(jthrow)return JC_THROW;}
    if(s->t==ND_FORIN){keys=jnewarr(8);jkeysof(coll,keys);arr=keys;}
    else{arr=jiterable(coll);if(!arr){jthrowerr(jErrT,"value is not iterable");return JC_THROW;}}
    n=0;
@@ -1885,7 +1922,7 @@ static int jexec(JNd*s,JOb*env){
    return c;
   case ND_TRY:{
    c=jexec(s->a,env);
-   if(c==JC_THROW&&!jabort&&s->c){
+   if(c==JC_THROW&&!jabort&&s->c&&!jgenret){
     JOb*ce=jnewenv(env);
     jthrow=0;
     if(s->b){jbindpat(s->b,jexv,ce,1);if(jthrow)c=JC_THROW;else c=jexec(s->c,ce);}
@@ -3721,12 +3758,14 @@ JNAT(jf_Map){
  JOb*m;JUNUSED;
  if(th.t!=JT_O||!jnewcall)return jthrowerr(jErrT,"Constructor Map requires 'new'");
  m=th.u.o;m->fl|=4;m->proto=jMapProto;
+ if(argc>0&&args[0].t==JT_O&&args[0].u.o->k!=OK_ARR){JOb*ia=jiterable(args[0]);if(jthrow)return jundef();if(ia)args[0]=jobj(ia);}   /* generators, Maps, Sets, custom iterables */
  if(argc>0&&args[0].t==JT_O&&args[0].u.o->k==OK_ARR){JOb*a=args[0].u.o;int i;for(i=0;i<a->na;i++){JV e=a->it[i];if(e.t==JT_O&&e.u.o->k==OK_ARR&&e.u.o->na>=2){jarrgrow(m,m->na+2);if(m->na+2<=m->ca){int f=jmfind(m,e.u.o->it[0]);if(f>=0)m->it[f+1]=e.u.o->it[1];else{m->it[m->na++]=e.u.o->it[0];m->it[m->na++]=e.u.o->it[1];}}}}}
  return th;}
 JNAT(jf_Set){
  JOb*m;JUNUSED;
  if(th.t!=JT_O||!jnewcall)return jthrowerr(jErrT,"Constructor Set requires 'new'");
  m=th.u.o;m->fl|=8;m->proto=jSetProto;
+ if(argc>0&&args[0].t==JT_O&&args[0].u.o->k!=OK_ARR){JOb*ia=jiterable(args[0]);if(jthrow)return jundef();if(ia)args[0]=jobj(ia);}
  if(argc>0&&args[0].t==JT_O&&args[0].u.o->k==OK_ARR){JOb*a=args[0].u.o;int i;for(i=0;i<a->na;i++){if(jmfind(m,a->it[i])<0){jarrgrow(m,m->na+1);if(m->na<m->ca)m->it[m->na++]=a->it[i];}}}
  else if(argc>0&&args[0].t==JT_S){JOb*a=jnewarr(8);int i;for(i=0;i<jcplen(args[0].u.s);i++)jarrpush(a,jstrat(args[0].u.s,i));for(i=0;i<a->na;i++)if(jmfind(m,a->it[i])<0){jarrgrow(m,m->na+1);if(m->na<m->ca)m->it[m->na++]=a->it[i];}}
  return th;}
@@ -4035,7 +4074,7 @@ static N*jhit(int x,int y){
 static void jevxy(JOb*e,int x,int y){
  jsetc(e,"clientX",jnum(x));jsetc(e,"clientY",jnum(y));jsetc(e,"pageX",jnum(x));jsetc(e,"pageY",jnum(y));jsetc(e,"button",jnum(0));}
 static int jprevented(JOb*e){return jtruthy(jget(jobj(e),jcstr("defaultPrevented")));}
-static int form_click(N*t,int x);   /* mwe_forms.h */
+static int form_click(N*t,int x,int y);   /* mwe_forms.h */
 int mwe_event_click(int x,int y){
  N*t=jhit(x,y);int fl=0,pv=0;JAPI
  if(!t)return 0;
@@ -4050,7 +4089,7 @@ int mwe_event_click(int x,int y){
   jleave();}
  if(pv)fl|=2;
  else{
-  N*in=t;fl|=form_click(t,x);
+  N*in=t;fl|=form_click(t,x,y);
   while(in&&in!=root&&!(seq(in->tag,"input")))in=in->par;
   if(in&&in!=root){
    S ty=getattr(in,"type");

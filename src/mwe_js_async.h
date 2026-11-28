@@ -5,23 +5,41 @@
  * Semantics worth knowing (see README, "JavaScript"):
  *  - Promise follows the spec (then/catch/finally, all/allSettled/race/any, thenable adoption, microtask
  *    ordering). Microtasks run when a host entry (script, event, timer) finishes.
- *  - The interpreter is a tree walker without coroutines, so `await` and generators cannot suspend:
- *      * `await p` runs the microtask queue and the timers until p settles, then continues. Results and
- *        errors are right; the *interleaving* with code after the async call differs from browsers
- *        (the async function runs to completion before the call returns).
- *      * a generator body runs eagerly at the first next()/iteration and its yielded values are buffered;
- *        values sent with next(v) are ignored and infinite generators stop with a RangeError after 100000 values.
+ *  - v0.13: async functions and generators are coroutines (own C stack, see the coroutine section below), so `await`
+ *    really suspends and generators are lazy, with browser-like ordering. Where coroutines are unavailable (not x86-64 System V,
+ *    or more than 128 live at once) the v0.12 behaviour remains: await pumps the event loop, generators run eagerly.
  *  - Symbols are unique strings that start with "\1@" (typeof says "symbol", they are hidden from enumeration). */
 #ifndef MWE_JS_ASYNC_H
 #define MWE_JS_ASYNC_H
 
+#if defined(__x86_64__) && !defined(_WIN32) && !defined(MWE_NO_COROUTINES)
+#define JCO_ASM 1
+#else
+#define JCO_ASM 0
+#endif
 #define JPF 32                 /* JOb.fl: promise */
 #define JGF 64                 /* JOb.fl: generator object */
 #define JPF_HANDLED 128        /* JOb.fl: a reaction was attached (unhandled-rejection report) */
 #define JGENMAX 100000
 
+typedef struct JCo JCo;
 static JOb *jmicroq, *jPromProto, *jGenProto, *junh;
 static int jmhead, jsymn;
+
+#define JCO_MAX 128
+#define JCO_STACK (1 << 20)            /* per coroutine; committed lazily by the OS */
+#define JCO_GUARD (64 << 10)           /* "Maximum call stack size exceeded" this close to the end of a stack */
+enum { JCO_FREE, JCO_NEW, JCO_RUN, JCO_SUSP, JCO_DONE };
+struct JCo {
+    int st, kind, mode, din, wait, gcs;     /* kind: 0 async function, 1 generator, 2 async generator; mode: how it was resumed (0 value, 1 throw, 2 return) */
+    void *sp;                          /* saved stack pointer while another stack runs */
+    char *stk, *lo, *hi;
+    JCo *res;                          /* the stack that resumed us (we switch back to it) */
+    JV val, out;                       /* value passed in / value yielded or returned out */
+    JOb *box, *obj;                    /* [function, this, args...] ; the promise (async fn) or generator object */
+};
+static JCo jcoro[JCO_MAX], jcomain;
+static JCo *jcocur = &jcomain;
 
 static JOb *jpnew(void) { JOb *p = jnewob(OK_PLAIN, jPromProto); p->fl |= JPF; p->pad = 0; p->ex = jundef(); return p; }
 static int jispromise(JV v) { return v.t == JT_O && (v.u.o->fl & JPF); }
@@ -119,7 +137,8 @@ static int jtimerstep(void) {
     return 1;
 }
 
-static JV jawait(JV v) {
+static JV jco_await(JV v);
+static JV jawait_block(JV v) {
     JOb *p;
     int spins = 0;
     if (jispromise(v)) p = v.u.o;
@@ -149,6 +168,8 @@ static JV jawait(JV v) {
     if (p->pad == 2) { jexv = p->ex; jthrow = 1; return jundef(); }
     return p->ex;
 }
+
+static JV jawait(JV v) { return jcocur != &jcomain ? jco_await(v) : jawait_block(v); }
 
 /* ---- Promise API ---- */
 JNAT(jf_Promise) {
@@ -269,78 +290,395 @@ JNAT(jpf_any) { return jcombinator(JARG(0), 2); }
 JNAT(jpf_race) { return jcombinator(JARG(0), 3); }
 JNAT(jw_queueMicrotask) { if (!jiscallable(JARG(0))) return jthrowerr(jErrT, "queueMicrotask: argument is not a function"); jmicropush(JARG(0), jundef(), jundef(), 3); return jundef(); }
 
-/* ---- generators (eager) ---- */
-static JOb *jgencur;
+/* ---- coroutines: async functions and generators run on their own C stacks (v0.13) ----
+ * A coroutine is a separate C stack plus saved registers. `await` registers a reaction on the promise and switches back to
+ * whoever resumed the coroutine (the caller of the async function the first time, the microtask loop later); the reaction
+ * switches back in, so the code after the await continues exactly where it stopped, as a microtask, while timers, rendering and
+ * input keep running in between. Generators use the same mechanism: next() resumes the body, yield suspends it.
+ * The switch is a few instructions of assembly (x86-64 System V: Linux, BSD, macOS/Intel). On other CPUs / Windows the engine
+ * falls back to the v0.12 behaviour (await pumps the event loop; generators run eagerly). The GC scans every coroutine stack. */
+
+#if JCO_ASM
+void mwe_jco_swap(void **save, void *to);
+void mwe_jco_boot(void);
+#if defined(__APPLE__)
+#define JCO_SYM(n) "_" n
+#else
+#define JCO_SYM(n) n
+#endif
+__asm__(".text\n"
+        ".globl " JCO_SYM("mwe_jco_swap") "\n" JCO_SYM("mwe_jco_swap") ":\n"
+        "\tpushq %rbp\n\tpushq %rbx\n\tpushq %r12\n\tpushq %r13\n\tpushq %r14\n\tpushq %r15\n"
+        "\tmovq %rsp, (%rdi)\n\tmovq %rsi, %rsp\n"
+        "\tpopq %r15\n\tpopq %r14\n\tpopq %r13\n\tpopq %r12\n\tpopq %rbx\n\tpopq %rbp\n\tret\n"
+        ".globl " JCO_SYM("mwe_jco_boot") "\n" JCO_SYM("mwe_jco_boot") ":\n"
+        "\tsubq $8, %rsp\n\tmovq %r12, %rdi\n\tcall " JCO_SYM("mwe_jco_main") "\n\tud2\n");
+void mwe_jco_main(JCo *c);
+#endif
+
+static void jco_release(JCo *c) {
+    c->st = JCO_FREE; c->box = 0; c->obj = 0; c->val = c->out = jundef(); c->res = 0;
+}
+static void jco_reset(void) {          /* new page: every suspended coroutine is simply dropped */
+    int i;
+    jcocur = &jcomain; jstklim = 0;
+    for (i = 0; i < JCO_MAX; i++) { jco_release(&jcoro[i]); mem_rel(jcoro[i].stk); jcoro[i].stk = 0; }
+}
+static int jco_spawn(int kind, JOb *fo, JV thisv, JV *args, int argc, JOb *obj) {
+#if JCO_ASM
+    int i, k;
+    JCo *c;
+    JOb *box;
+    void **sp;
+    for (i = 0; i < JCO_MAX && jcoro[i].st != JCO_FREE; i++) {}
+    if (i == JCO_MAX) return -1;
+    c = &jcoro[i];
+    if (!c->stk) { c->stk = (char *)mem_get(JCO_STACK); if (!c->stk) return -1; }
+    box = jnewarr(argc + 2);
+    jarrpush(box, jobj(fo)); jarrpush(box, thisv);
+    for (k = 0; k < argc; k++) jarrpush(box, args[k]);
+    c->st = JCO_NEW; c->kind = kind; c->mode = 0; c->din = 0; c->wait = 0; c->box = box; c->obj = obj; c->res = 0;
+    c->val = c->out = jundef(); c->lo = c->stk; c->hi = c->stk + JCO_STACK;
+    sp = (void **)(((unsigned long)c->hi) & ~15UL);
+    *--sp = 0;                                         /* fake return address of the boot code */
+    *--sp = (void *)mwe_jco_boot;                      /* where the first switch "returns" to */
+    *--sp = 0; *--sp = 0;                              /* rbp, rbx */
+    *--sp = (void *)c;                                 /* r12: the coroutine, passed on to mwe_jco_main */
+    *--sp = 0; *--sp = 0; *--sp = 0;                   /* r13 r14 r15 */
+    c->sp = (void *)sp;
+    return i;
+#else
+    (void)kind; (void)fo; (void)thisv; (void)args; (void)argc; (void)obj;
+    return -1;
+#endif
+}
+/* run c until it suspends or finishes */
+static void jco_resume(JCo *c, int mode, JV val) {
+#if JCO_ASM
+    JCo *me = jcocur;
+    int outer = jdepth;
+    char *sl = jstklim;
+    c->res = me; c->mode = mode; c->val = val;
+    jdepth = c->din;
+    jstklim = c->lo + JCO_GUARD;
+    jcocur = c; c->st = JCO_RUN;
+    mwe_jco_swap(&me->sp, c->sp);
+    jcocur = me; jstklim = sl;
+    c->din = jdepth; jdepth = outer;
+#else
+    (void)c; (void)mode; (void)val;
+#endif
+}
+static void jco_suspend(JCo *c) {
+#if JCO_ASM
+    c->st = JCO_SUSP;
+    mwe_jco_swap(&c->sp, c->res->sp);
+#else
+    (void)c;
+#endif
+}
+static void jag_settle(JCo *c);
+static void jag_after_fwd(JOb *g, JCo *c);
+#if JCO_ASM
+__attribute__((used, noinline)) void mwe_jco_main(JCo *c) {
+    JV r, fo, th;
+    JOb *b = c->box;
+    fo = b->it[0]; th = b->it[1];
+    r = jcallfn0(fo.u.o, th, b->it + 2, b->na - 2, 0);
+    if (c->kind == 0) {                                /* async function: settle its promise */
+        JOb *p = c->obj;
+        if (jabort) { jthrow = 0; }
+        else if (jthrow) { JV e = jexv; jthrow = 0; jpsettle(p, 2, e); }
+        else jpresolve(p, r);
+    } else {                                           /* generator: the final value, or the exception for the caller of next() */
+        if (jthrow && jgenret) { jgenret = 0; jthrow = 0; c->mode = 0; c->out = jexv; }
+        else if (jthrow) { c->mode = 1; c->out = jexv; jthrow = 0; }
+        else { c->mode = 0; c->out = r; }
+        jexv = jundef();
+    }
+    c->st = JCO_DONE;
+    if (c->kind == 2) jag_settle(c);
+    mwe_jco_swap(&c->sp, c->res->sp);
+    for (;;) {}
+}
+#endif
+
+/* ---- garbage collector support ---- */
+static int jco_cur_hi(char **hi) { if (jcocur == &jcomain) return 0; *hi = jcocur->hi; return 1; }
+static void jco_scan_others(void) {
+    int i;
+    if (jcocur != &jcomain && jstackbase && jcomain.sp) jscanrange((char *)jcomain.sp, jstackbase);
+    for (i = 0; i < JCO_MAX; i++) {
+        JCo *c = &jcoro[i];
+        c->gcs = 0;
+        if (c->st == JCO_FREE) continue;
+        if (c->kind != 1 || c->st == JCO_RUN) {         /* async functions are always alive; a generator that is running is on the call chain */
+            jmarkp(c->box); jmarkp(c->obj); jmarkv(c->val); jmarkv(c->out);
+            if (c != jcocur && c->st != JCO_NEW && c->sp) jscanrange((char *)c->sp, c->hi);
+            c->gcs = 1;
+        }
+    }
+}
+static int jco_gc_gens(void) {
+    int i, ch = 0;
+    for (i = 0; i < JCO_MAX; i++) {
+        JCo *c = &jcoro[i];
+        if (c->st == JCO_SUSP && c->kind == 1 && !c->gcs && c->obj) {
+            JHd *h = jfindblk(c->obj);
+            if (h && h->mk) {
+                c->gcs = 1; ch = 1;
+                jmarkp(c->box); jmarkv(c->val); jmarkv(c->out);
+                jscanrange((char *)c->sp, c->hi);
+                jdrain();
+            }
+        }
+    }
+    return ch;
+}
+static void jco_gc_free_dead(void) {
+    int i;
+    for (i = 0; i < JCO_MAX; i++) { JCo *c = &jcoro[i]; if (c->st == JCO_SUSP && c->kind == 1 && !c->gcs) jco_release(c); }
+}
+
+/* ---- await inside a coroutine ---- */
+static void jco_after(JCo *c) {
+    if (c->kind == 0) { if (c->st == JCO_DONE) jco_release(c); }
+    else if (c->kind == 2) { JOb *g = c->obj; jag_after_fwd(g, c); }
+}
+JNAT(jco_nf_ok) { JCo *c = &jcoro[jcurnat->pad]; JV v = JARG(0); jco_resume(c, 0, v); jco_after(c); return jundef(); }
+JNAT(jco_nf_err) { JCo *c = &jcoro[jcurnat->pad]; JV v = JARG(0); jco_resume(c, 1, v); jco_after(c); return jundef(); }
+static int jco_start_async(JOb *fo, JV thisv, JV *args, int argc, JOb *p) {
+    int idx = jco_spawn(0, fo, thisv, args, argc, p);
+    if (idx < 0) return 0;
+    jco_resume(&jcoro[idx], 0, jundef());
+    jco_after(&jcoro[idx]);
+    return 1;
+}
+static JV jco_await(JV v) {
+    JCo *c = jcocur;
+    JOb *p, *ok, *er;
+    if (jispromise(v)) p = v.u.o;
+    else { p = jpnew(); jpresolve(p, v); if (jthrow) return jundef(); }
+    ok = jmknat(0, jco_nf_ok); ok->pad = (short)(c - jcoro);
+    er = jmknat(0, jco_nf_err); er->pad = (short)(c - jcoro);
+    jthen(p, jobj(ok), jobj(er));
+    c->wait = 1;
+    jco_suspend(c);
+    c->wait = 0;
+    if (c->mode == 1) { jexv = c->val; jthrow = 1; return jundef(); }
+    return c->val;
+}
+
+/* ---- generators ---- */
 static JV jiterres(JV value, int done) {
     JOb *o = jnewob(OK_PLAIN, jObjProto);
     jaddpr(o, jintc("value"), value, 0);
     jaddpr(o, jintc("done"), jbool(done), 0);
     return jobj(o);
 }
+/* generator object: ex = [function, this, args...]; pad = (state << 8) | (coroutine slot + 1), state: 0 not started, 1 suspended at a yield, 2 running, 3 finished */
+#define JG_ST(g) ((g)->pad >> 8)
+#define JG_SLOT(g) ((g)->pad & 255)
+#define JG_SET(g, st, slot1) ((g)->pad = (short)(((st) << 8) | (slot1)))
 static JV jmkgen(JOb *fo, JV thisv, JV *args, int argc) {
-    JOb *g = jnewob(OK_PLAIN, jGenProto), *av = jnewarr(argc > 0 ? argc : 1);
+    JOb *g = jnewob(OK_PLAIN, jGenProto), *box = jnewarr(argc + 2);
     int i;
-    g->fl |= JGF; g->pad = 0; g->env = fo;
-    for (i = 0; i < argc; i++) jarrpush(av, args[i]);
-    jaddpr(g, jintc("%this"), thisv, 1);
-    jaddpr(g, jintc("%args"), jobj(av), 1);
-    jaddpr(g, jintc("%pos"), jnum(0), 1);
-    jaddpr(g, jintc("%ret"), jundef(), 1);
+    jarrpush(box, jobj(fo)); jarrpush(box, thisv);
+    for (i = 0; i < argc; i++) jarrpush(box, args[i]);
+    g->fl |= JGF; JG_SET(g, 0, 0); g->env = fo; g->ex = jobj(box);
     return jobj(g);
 }
-static JV jcallfn0(JOb *fo, JV thisv, JV *args, int argc, int isnew);
-static void jgenrun(JOb *g) {
-    JOb *saved, *av;
-    JV thisv, r;
-    if (g->pad) return;
-    g->pad = 1;
-    thisv = jget(jobj(g), jintc("%this")); av = jget(jobj(g), jintc("%args")).u.o;
-    saved = jgencur; jgencur = g;
-    r = jcallfn0(g->env, thisv, av->it, av->na, 0);
-    jgencur = saved;
-    if (!jthrow) jput(jobj(g), jintc("%ret"), r);
+/* mode 0 next(val), 1 throw(val), 2 return(val); returns { value, done } */
+static JV jgen_step(JOb *g, int mode, JV val) {
+    JCo *c;
+    int idx, st = JG_ST(g);
+    if (st == 2) return jthrowerr(jErrT, "Generator is already running");
+    if (st == 3) {
+        if (mode == 1) { jexv = val; jthrow = 1; return jundef(); }
+        return jiterres(mode == 2 ? val : jundef(), 1);
+    }
+    if (st == 0) {
+        if (mode == 1) { JG_SET(g, 3, 0); jexv = val; jthrow = 1; return jundef(); }
+        if (mode == 2) { JG_SET(g, 3, 0); return jiterres(val, 1); }
+        idx = jco_spawn(1, g->env, jundef(), 0, 0, g);
+        if (idx < 0) return jthrowerr(jErrR, "too many active generators");
+        jcoro[idx].box = g->ex.u.o;                     /* the call saved by jmkgen */
+        c = &jcoro[idx];
+        JG_SET(g, 2, idx + 1);
+        jco_resume(c, 0, jundef());
+    } else {
+        c = &jcoro[JG_SLOT(g) - 1];
+        JG_SET(g, 2, JG_SLOT(g));
+        jco_resume(c, mode, val);
+    }
+    if (c->st == JCO_DONE) {
+        JV out = c->out; int m = c->mode;
+        JG_SET(g, 3, 0); jco_release(c);
+        if (m == 1) { jexv = out; jthrow = 1; return jundef(); }
+        return jiterres(out, 1);
+    }
+    JG_SET(g, 1, JG_SLOT(g));
+    return jiterres(c->out, 0);
 }
-static JV jgennext(JOb *g) {
-    int pos;
-    jgenrun(g);
-    if (jthrow) return jundef();
-    pos = (int)jtonum(jget(jobj(g), jintc("%pos")));
-    if (pos < g->na) { jput(jobj(g), jintc("%pos"), jnum(pos + 1)); return jiterres(g->it[pos], 0); }
-    jput(jobj(g), jintc("%pos"), jnum(g->na + 1));                 /* the return value is delivered once */
-    return jiterres(pos == g->na ? jget(jobj(g), jintc("%ret")) : jundef(), 1);
-}
-JNAT(jg_next) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "next method called on incompatible receiver"); return jgennext(th.u.o); }
-JNAT(jg_return) {
-    if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "return method called on incompatible receiver");
-    th.u.o->pad = 1; jput(th, jintc("%pos"), jnum(th.u.o->na));
-    return jiterres(JARG(0), 1);
-}
-JNAT(jg_throw) { jexv = JARG(0); jthrow = 1; return jundef(); }
+JNAT(jg_next) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "next method called on incompatible receiver"); return jgen_step(th.u.o, 0, JARG(0)); }
+JNAT(jg_return) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "return method called on incompatible receiver"); return jgen_step(th.u.o, 2, JARG(0)); }
+JNAT(jg_throw) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "throw method called on incompatible receiver"); return jgen_step(th.u.o, 1, JARG(0)); }
 JNAT(jg_iter) { return th; }
+/* yield v: hand v to the caller of next(), continue when it is called again */
+static JV jco_yield(JV v) {
+    JCo *c = jcocur;
+    c->out = v;
+    jco_suspend(c);
+    if (c->mode == 1) { jexv = c->val; jthrow = 1; return jundef(); }
+    if (c->mode == 2) { jgenret = 1; jexv = c->val; jthrow = 1; return jundef(); }
+    return c->val;
+}
 static JV jyieldeval(JNd *n, JOb *env) {
     JV v = n->a ? jev(n->a, env) : jundef();
     if (jthrow) return jundef();
-    if (!jgencur) return jthrowerr(jErrT, "yield outside of a generator");
-    if (n->x) {                                         /* yield* */
-        JOb *arr = jiterable(v);
-        int i;
-        if (jthrow) return jundef();
-        if (!arr) return jthrowerr(jErrT, "yield* operand is not iterable");
-        for (i = 0; i < arr->na; i++) jarrpush(jgencur, arr->it[i]);
-        return jundef();
+    if (jcocur == &jcomain || jcocur->kind == 0) return jthrowerr(jErrT, "yield outside of a generator");
+    if (n->x) {                                         /* yield*: delegate */
+        if (v.t == JT_O && (v.u.o->fl & JGF)) {
+            JV sent = jundef();
+            for (;;) {
+                JV r = jgen_step(v.u.o, 0, sent), d;
+                if (jthrow) return jundef();
+                d = jget(r, jintc("done"));
+                if (jtruthy(d)) return jget(r, jintc("value"));
+                sent = jco_yield(jget(r, jintc("value")));
+                if (jthrow) return jundef();
+            }
+        } else {
+            JOb *arr = jiterable(v);
+            int i;
+            if (jthrow) return jundef();
+            if (!arr) return jthrowerr(jErrT, "yield* operand is not iterable");
+            for (i = 0; i < arr->na; i++) { jco_yield(arr->it[i]); if (jthrow) return jundef(); }
+            return jundef();
+        }
     }
-    if (jgencur->na >= JGENMAX) return jthrowerr(jErrR, "generator produced too many values (generators run eagerly in this engine)");
-    jarrpush(jgencur, v);
-    return jundef();
+    return jco_yield(v);
 }
 
-/* custom iterables: [Symbol.iterator]() / [Symbol.asyncIterator]() protocols, collected eagerly */
+/* ---- async generators (async function*): next() returns a promise; `await` and `yield` may be mixed ----
+ * obj = the generator object; its `ex` holds the call box, `na/it` is unused. Requests wait in a queue (array stored in the property %q);
+ * the head request's promise is settled when the body yields, returns or throws. */
+static void jag_pump(JOb *g);
+static void jag_after(JOb *g, JCo *c) {   /* a kind-2 coroutine just stopped (yield, return, throw or await): settle the request being served */
+    JV pv = jget(jobj(g), jintc("%cur"));
+    JOb *p;
+    if (pv.t != JT_O) return;
+    p = pv.u.o;
+    if (c->st == JCO_DONE) {
+        JV out = c->out; int m = c->mode;
+        JG_SET(g, 3, 0); jco_release(c);
+        if (m == 1) jpsettle(p, 2, out); else jpresolve(p, jiterres(out, 1));
+        jput(jobj(g), jintc("%cur"), jundef());
+    } else if (!c->wait) {                              /* suspended at a yield */
+        JG_SET(g, 1, (int)(c - jcoro) + 1);
+        jput(jobj(g), jintc("%cur"), jundef());
+        jpresolve(p, jiterres(c->out, 0));
+    }
+}
+static void jag_settle(JCo *c) { (void)c; }
+static JV jag_request(JOb *g, int mode, JV val) {
+    JOb *q = jget(jobj(g), jintc("%q")).u.o, *p = jpnew(), *rq = jnewarr(3);
+    jarrpush(rq, jnum(mode)); jarrpush(rq, val); jarrpush(rq, jobj(p));
+    jarrpush(q, jobj(rq));
+    jag_pump(g);
+    return jobj(p);
+}
+static void jag_pump(JOb *g) {
+    JOb *q = jget(jobj(g), jintc("%q")).u.o;
+    while (q->na > 0 && JG_ST(g) != 2 && jget(jobj(g), jintc("%cur")).t != JT_O) {
+        JOb *rq = q->it[0].u.o, *p = rq->it[2].u.o;
+        int mode = (int)rq->it[0].u.d, i, st = JG_ST(g);
+        JV val = rq->it[1];
+        JCo *c;
+        for (i = 1; i < q->na; i++) q->it[i - 1] = q->it[i];
+        q->na--;
+        if (st == 3 || (st == 0 && mode != 0)) {
+            JG_SET(g, 3, 0);
+            if (mode == 1) jpsettle(p, 2, val); else jpresolve(p, jiterres(mode == 2 ? val : jundef(), 1));
+            continue;
+        }
+        jput(jobj(g), jintc("%cur"), jobj(p));
+        if (st == 0) {
+            int idx = jco_spawn(2, g->env, jundef(), 0, 0, g);
+            if (idx < 0) { jput(jobj(g), jintc("%cur"), jundef()); jpsettle(p, 2, jcv("too many active generators")); continue; }
+            jcoro[idx].box = g->ex.u.o; c = &jcoro[idx];
+            JG_SET(g, 2, idx + 1); jco_resume(c, 0, jundef());
+        } else { c = &jcoro[JG_SLOT(g) - 1]; JG_SET(g, 2, JG_SLOT(g)); jco_resume(c, mode, val); }
+        jag_after(g, c);
+        if (c->st == JCO_SUSP && c->wait) { JG_SET(g, 2, (int)(c - jcoro) + 1); break; }   /* waiting for an await: the resume handler pumps again */
+    }
+}
+JNAT(jag_next) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "next method called on incompatible receiver"); return jag_request(th.u.o, 0, JARG(0)); }
+JNAT(jag_return) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "return method called on incompatible receiver"); return jag_request(th.u.o, 2, JARG(0)); }
+JNAT(jag_throw) { if (th.t != JT_O || !(th.u.o->fl & JGF)) return jthrowerr(jErrT, "throw method called on incompatible receiver"); return jag_request(th.u.o, 1, JARG(0)); }
+static void jag_after_fwd(JOb *g, JCo *c) { jag_after(g, c); jag_pump(g); }
+static JV jmkagen(JOb *fo, JV thisv, JV *args, int argc) {
+    JV g = jmkgen(fo, thisv, args, argc);
+    g.u.o->proto = jAGenProto;
+    jaddpr(g.u.o, jintc("%q"), jobj(jnewarr(2)), 1);
+    jaddpr(g.u.o, jintc("%cur"), jundef(), 1);
+    return g;
+}
+
+/* lazy iteration for for...of / for await: generators and custom iterators are stepped one value at a time, and closed with return() when the loop exits early */
+static int jlazy(JV coll, int async, JV *it, JV *nx, int *gen) {
+    JOb *o;
+    JV f;
+    if (coll.t != JT_O) return 0;
+    o = coll.u.o;
+    *gen = 0; *nx = jundef();
+    if (o->fl & JGF) { *it = coll; *gen = 1; *nx = jget(coll, jintc("next")); return 1; }
+    if (o->k == OK_ARR || (o->fl & 12) || o->k == OK_PROXY) return 0;
+    f = jget(coll, jintc(async ? "\1@asyncIterator" : "\1@iterator"));
+    if (jthrow) return 1;
+    if (!jiscallable(f)) return 0;
+    *it = jcall(f, coll, 0, 0);
+    if (jthrow) return 1;
+    if (it->t != JT_O) { jthrowerr(jErrT, "iterator is not an object"); return 1; }
+    *nx = jget(*it, jintc("next"));
+    if (jthrow) return 1;
+    if (!jiscallable(*nx)) { jthrowerr(jErrT, "iterator.next is not a function"); return 1; }
+    *gen = (it->u.o->fl & JGF) != 0;
+    return 1;
+}
+static void jiterclose(JV it, int gen, int async) {   /* call it.return() without disturbing a pending exception / return value */
+    int st = jthrow, ab = jabort;
+    JV sv = jexv, rv = jrv, r;
+    JStr *lb = jlabel;
+    JV f;
+    if (ab) return;
+    jthrow = 0;
+    if (gen && !async && it.t == JT_O) { r = jgen_step(it.u.o, 2, jundef()); (void)r; }
+    else {
+        f = jget(it, jintc("return"));
+        if (!jthrow && jiscallable(f)) { r = jcall(f, it, 0, 0); if (!jthrow && async) jawait(r); }
+    }
+    if (jthrow && !st) return;                        /* a failing return() reports its error when nothing else is pending */
+    jthrow = st; jexv = sv; jrv = rv; jlabel = lb;
+}
+
+/* custom iterables: [Symbol.iterator]() / [Symbol.asyncIterator]() protocols, collected eagerly (for...of itself iterates lazily) */
 static JOb *jiterfrom(JV v) {
     JOb *r;
     JV f, it, nx, res;
     int async = 0, n = 0;
     if (v.t != JT_O) return 0;
-    if (v.u.o->fl & JGF) { jgenrun(v.u.o); if (jthrow) return 0; return v.u.o; }
+    if (v.u.o->fl & JGF) {
+        r = jnewarr(8);
+        for (;;) {
+            res = jgen_step(v.u.o, 0, jundef());
+            if (jthrow) return 0;
+            if (jtruthy(jget(res, jintc("done")))) break;
+            jarrpush(r, jget(res, jintc("value")));
+            if (++n >= JGENMAX) { jthrowerr(jErrR, "generator produced too many values"); return 0; }
+        }
+        return r;
+    }
     f = jget(v, jintc("\1@iterator"));
     if (jthrow) return 0;
     if (!jiscallable(f)) { f = jget(v, jintc("\1@asyncIterator")); async = 1; if (!jiscallable(f)) return 0; }
@@ -385,7 +723,8 @@ static int jissym(JV v) { return v.t == JT_S && v.u.s->len > 1 && v.u.s->d[0] ==
 
 static void jinit_async(void) {
     JOb *f, *o;
-    jmicroq = jnewarr(32); jmhead = 0; junh = jnewarr(4); jsymn = 0; jgencur = 0; jcurnat = 0;
+    jmicroq = jnewarr(32); jmhead = 0; junh = jnewarr(4); jsymn = 0; jgencur = 0; jcurnat = 0; jgenret = 0;
+    jco_reset();
     jPromProto = jnewob(OK_PLAIN, jObjProto);
     jGenProto = jnewob(OK_PLAIN, jObjProto);
     f = jctor("Promise", jf_Promise, jPromProto);
@@ -394,6 +733,9 @@ static void jinit_async(void) {
     jdef(jPromProto, "then", jp_then); jdef(jPromProto, "catch", jp_catch); jdef(jPromProto, "finally", jp_finally);
     jdef(jGenProto, "next", jg_next); jdef(jGenProto, "return", jg_return); jdef(jGenProto, "throw", jg_throw);
     jaddpr(jGenProto, jintc("\1@iterator"), jobj(jmknat("[Symbol.iterator]", jg_iter)), 1);
+    jAGenProto = jnewob(OK_PLAIN, jObjProto);
+    jdef(jAGenProto, "next", jag_next); jdef(jAGenProto, "return", jag_return); jdef(jAGenProto, "throw", jag_throw);
+    jaddpr(jAGenProto, jintc("\1@asyncIterator"), jobj(jmknat("[Symbol.asyncIterator]", jg_iter)), 1);
     jgset("queueMicrotask", jobj(jmknat("queueMicrotask", jw_queueMicrotask)));
     f = jmknat("Symbol", jf_Symbol); jgset("Symbol", jobj(f));
     jdef(f, "for", jsy_for);

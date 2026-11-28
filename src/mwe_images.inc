@@ -9,23 +9,33 @@ static Im ims[MAXIMG];static int nims;
 #define IMGPIX (1<<22)                               /* decoded pixels kept per page (16 MB), each image allocated on its own */
 static long long ipn;                                /* pixels in use */
 static void imfreeall(void){int i;for(i=0;i<nims;i++)if(ims[i].px){mem_rel(ims[i].px);ims[i].px=0;}ipn=0;}
+static int imsvg(int i,const unsigned char*d,int n);   /* mwe_svg.h: SVG files are drawn by the SVG rasterizer */
 static int imset(int i,const unsigned char*d,int n){
  int w=0,h=0,f;unsigned*px;
  if(i<0||i>=nims)return 0;
  ims[i].st=2;
  f=mi_probe(d,n,&w,&h);
- if(!f||w<=0||h<=0||(long long)w*h>IMGPIX-ipn)return 0;
+ if(!f)return imsvg(i,d,n);
+ if(w<=0||h<=0||(long long)w*h>IMGPIX-ipn)return 0;
  px=(unsigned*)mem_get((unsigned long)w*(unsigned long)h*4UL);
  if(!px)return 0;
  if(!mi_decode(f,d,n,px,w,h)){mem_rel(px);return 0;}
  ims[i].px=px;ims[i].w=w;ims[i].h=h;ims[i].st=1;ipn+=(long long)w*h;return 1;}
 static int b64v(int c){return c>='A'&&c<='Z'?c-'A':c>='a'&&c<='z'?c-'a'+26:c>='0'&&c<='9'?c-'0'+52:c=='+'||c=='-'?62:c=='/'||c=='_'?63:-1;}
+static int imhx(int c){return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:c>='A'&&c<='F'?c-'A'+10:-1;}
 static int imdata(int i){   /* data:[mime];base64,PAYLOAD */
  S u=ims[i].src;int k=5,b64=0,o=0,acc=0,nb=0,v;
  while(k<u.n&&u.p[k]!=',')k++;
  if(k>=u.n)return 0;
  {int j;for(j=5;j+6<=k;j++)if(lc(u.p[j])==';'&&lc(u.p[j+1])=='b'&&lc(u.p[j+2])=='a'&&lc(u.p[j+3])=='s'&&lc(u.p[j+4])=='e'&&u.p[j+5]=='6')b64=1;}
- if(!b64)return 0;
+ if(!b64){   /* data:image/svg+xml;utf8,<svg ...> or percent-encoded text */
+  int r;mu8*td=(mu8*)mem_get((unsigned long)(u.n-k)+2UL);
+  if(!td)return 0;
+  for(k++;k<u.n;k++){
+   int c=(unsigned char)u.p[k],h1,h2;
+   if(c=='%'&&k+2<u.n&&(h1=imhx(u.p[k+1]))>=0&&(h2=imhx(u.p[k+2]))>=0){td[o++]=(mu8)(h1*16+h2);k+=2;}
+   else td[o++]=(mu8)c;}
+  r=imset(i,td,o);mem_rel(td);return r;}
  {int r;mu8*idat=(mu8*)mem_get((unsigned long)(u.n-k)*3UL/4UL+8UL);   /* decoded payload, released right after the image is decoded */
  if(!idat)return 0;
  for(k++;k<u.n;k++){

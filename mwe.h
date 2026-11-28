@@ -2,7 +2,7 @@
 /* MiniWebEngine v0.10 public API (build mwe.c with -DMWE_LIB to embed it). */
 #ifndef MWE_H
 #define MWE_H
-#define MWE_VERSION "0.12"
+#define MWE_VERSION "0.13"
 
 /* Parse html (modified in place; the buffer must stay valid while the page is
  * used) and compute styles. Returns nonzero if the document was truncated. */
@@ -100,6 +100,24 @@ int  mwe_input_text(const char *utf8, int n);
 int  mwe_input_key(const char *key);
 void mwe_blur(void);
 int  mwe_form_submit(const char **method, const char **action, const char **data, int *dlen);
+/* Text selection (v0.13). Mouse: mwe_mouse_down() when the button goes down (clicks 1/2/3 = caret / word / line), mwe_mouse_drag() while it
+ * moves, mwe_mouse_up() on release; if the mouse did not move between down and up the host sends the usual mwe_event_click(). Selected text is
+ * highlighted by mwe_paint(); mwe_selection() returns it for Ctrl+C / Ctrl+X (the focused field's selection first, else the page's).
+ * Keys: mwe_sel_key(name, mods) extends/moves the page selection (mods: 1 shift, 2 ctrl), mwe_input_key_ex() does the same inside a field,
+ * mwe_sel_all() / mwe_field_select_all() = Ctrl+A. mwe_sel_focus_y() tells where the selection end is (to scroll it into view, -1 none). */
+int  mwe_mouse_down(int x, int y, int clicks);
+int  mwe_mouse_drag(int x, int y);
+void mwe_mouse_up(void);
+const char *mwe_selection(int *len);
+int  mwe_sel_active(void);
+int  mwe_sel_has_caret(void);
+void mwe_sel_begin(int x, int y, int clicks);
+void mwe_sel_clear(void);
+void mwe_sel_all(void);
+int  mwe_sel_key(const char *key, int mods);
+int  mwe_sel_focus_y(void);
+void mwe_field_select_all(void);
+int  mwe_input_key_ex(const char *key, int mods);
 int  mwe_event_key(const char *type, const char *key); /* "keydown"/"keyup"; same return bits */
 int  mwe_js_eval(const char *src, int len);           /* run extra script text (debug consoles/tests); 1 = page changed */
 const char *mwe_js_log(int *len);                     /* console output (UTF-8) */

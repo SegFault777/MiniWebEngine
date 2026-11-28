@@ -108,6 +108,9 @@ void*mb_plat_alloc(unsigned long n){return calloc(1,n);}
 void mb_plat_free(void*p){free(p);}
 static long long realms(void){static long long t;return t+=5;}
 #endif
+static char clip[1<<16];static int clipn;   /* in-memory clipboard of the headless host (tests print it with --clip) */
+void mb_plat_clipboard_set(const char*t,int n){if(n>(int)sizeof clip)n=(int)sizeof clip;memcpy(clip,t,(size_t)n);clipn=n;}
+int mb_plat_clipboard_get(char*b,int cap){int n=clipn<cap?clipn:cap;memcpy(b,clip,(size_t)n);return n;}
 int mb_plat_readfile(const char*path,char*buf,int cap){FILE*f=fopen(path,"rb");int n;if(!f)return -1;n=(int)fread(buf,1,(size_t)cap,f);fclose(f);return n;}
 long long mb_plat_ms(void){return realms();}
 void mb_plat_alert(const char*s,int n){fprintf(stderr,"alert: %.*s\n",n,s);}
@@ -146,9 +149,21 @@ int main(int ac,char**av){
   else if(!strcmp(av[i],"--type")&&i+1<ac){const unsigned char*s=(const unsigned char*)av[++i];   /* type UTF-8 text */
    while(*s){int c=*s++;if(c>=0xF0){c=(c&7)<<18|(s[0]&63)<<12|(s[1]&63)<<6|(s[2]&63);s+=3;}else if(c>=0xE0){c=(c&15)<<12|(s[0]&63)<<6|(s[1]&63);s+=2;}else if(c>=0xC0){c=(c&31)<<6|(s[0]&63);s++;}mb_char(c);}
    settle(60000);}
-  else if(!strcmp(av[i],"--press")&&i+1<ac){const char*k=av[++i];   /* named key */
-   int c=!strcmp(k,"Enter")?MBK_ENTER:!strcmp(k,"Backspace")?MBK_BACKSPACE:!strcmp(k,"Delete")?MBK_DELETE:!strcmp(k,"Left")?MBK_LEFT:!strcmp(k,"Right")?MBK_RIGHT:!strcmp(k,"Home")?MBK_HOME:!strcmp(k,"End")?MBK_END:!strcmp(k,"Up")?MBK_UP:!strcmp(k,"Down")?MBK_DOWN:!strcmp(k,"Tab")?MBK_TAB:MBK_SHIFT_TAB;
-   mb_key(c);settle(60000);}
+  else if(!strcmp(av[i],"--drag")&&i+4<ac){   /* select by dragging with the left button */
+   int x1=num(av[i+1]),y1=num(av[i+2]),x2=num(av[i+3]),y2=num(av[i+4]);i+=4;
+   mb_mouse_down(x1,y1,1);mb_mouse_drag((x1+x2)/2,(y1+y2)/2);mb_mouse_drag(x2,y2);mb_mouse_up(x2,y2);}
+  else if((!strcmp(av[i],"--dblclick")||!strcmp(av[i],"--tripleclick"))&&i+2<ac){
+   int x1=num(av[i+1]),y1=num(av[i+2]),cl=av[i][2]=='d'?2:3;i+=2;
+   mb_mouse_down(x1,y1,1);mb_mouse_up(x1,y1);if(cl>=2){mb_mouse_down(x1,y1,2);mb_mouse_up(x1,y1);}if(cl>=3){mb_mouse_down(x1,y1,3);mb_mouse_up(x1,y1);}}
+  else if(!strcmp(av[i],"--clip")){   /* print the clipboard, newlines as \n */
+   int q;printf("clipboard: ");for(q=0;q<clipn;q++){if(clip[q]=='\n')printf("\\n");else putchar(clip[q]);}printf("\n");}
+  else if(!strcmp(av[i],"--setclip")&&i+1<ac){mb_plat_clipboard_set(av[i+1],(int)strlen(av[i+1]));i++;}
+  else if(!strcmp(av[i],"--press")&&i+1<ac){const char*k=av[++i];   /* named key; prefixes S- (shift) and C- (ctrl) */
+   int mods=0,c;
+   while(k[0]&&k[1]=='-'&&(k[0]=='S'||k[0]=='C')){mods|=k[0]=='S'?MBMOD_SHIFT:MBMOD_CTRL;k+=2;}
+   if(k[1]==0&&k[0]>=32){mb_key_ex(k[0],mods);settle(60000);continue;}
+   c=!strcmp(k,"Enter")?MBK_ENTER:!strcmp(k,"Backspace")?MBK_BACKSPACE:!strcmp(k,"Delete")?MBK_DELETE:!strcmp(k,"Left")?MBK_LEFT:!strcmp(k,"Right")?MBK_RIGHT:!strcmp(k,"Home")?MBK_HOME:!strcmp(k,"End")?MBK_END:!strcmp(k,"Up")?MBK_UP:!strcmp(k,"Down")?MBK_DOWN:!strcmp(k,"Tab")?MBK_TAB:MBK_SHIFT_TAB;
+   mb_key_ex(c,mods);settle(60000);}
   else if(!strcmp(av[i],"--trace")){trace=1;}}
  if(trace)fprintf(stderr,"trace: %s maxtick=%lldms\n",mb_summary(),maxtick);
  mb_draw(px);

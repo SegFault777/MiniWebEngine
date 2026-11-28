@@ -70,6 +70,28 @@ save('sg.jpg', sm.convert('L'), (4, 0.5), quality=92)
 save('big.jpg', smooth(300, 200), (4, 0.5), quality=80, subsampling=2)
 sm.save(os.path.join(tmp, 'prog.jpg'), progressive=True, quality=85)
 
+# ---- WebP lossless (v0.13): exact match with Pillow/libwebp. Several encoder configurations exercise predictor, cross-colour,
+# subtract-green, colour-indexing (palette) transforms, the colour cache, backward references and meta prefix codes.
+def webp(name, im, **kw):
+    im.save(os.path.join(tmp, name), 'WEBP', lossless=True, **kw)
+    cases.append((name, (0, 0)))
+random.seed(11)
+webp('ll_rgb.webp', smooth(97, 61), quality=100, method=6)
+webp('ll_rgb_fast.webp', smooth(64, 64), quality=0, method=0)
+webp('ll_noise.webp', noise(120, 90), quality=90, method=4)
+rgba = Image.new('RGBA', (70, 50)); rp = rgba.load()
+for y in range(50):
+    for x in range(70): rp[x, y] = ((x * 3) % 256, (y * 5) % 256, (x * y) % 256, 255 if (x // 7 + y // 7) % 2 else (x * 3) % 256)
+webp('ll_rgba.webp', rgba, quality=100, method=5)
+pal = Image.new('P', (50, 40)); pal.putpalette([c for i in range(16) for c in (i * 15, 255 - i * 10, (i * 37) % 256)]); pal.putdata([((x // 3) + (y // 4)) % 16 for y in range(40) for x in range(50)])
+webp('ll_pal16.webp', pal.convert('RGB'), quality=100, method=6)
+pal2 = Image.new('P', (33, 17)); pal2.putpalette([0, 0, 0, 255, 255, 255]); pal2.putdata([(x + y) % 2 for y in range(17) for x in range(33)])
+webp('ll_pal2.webp', pal2.convert('RGB'), quality=100)
+webp('ll_tiny.webp', Image.new('RGBA', (1, 1), (10, 20, 30, 40)))
+big = smooth(400, 300); webp('ll_big.webp', big, quality=75, method=3)
+import io
+buf = io.BytesIO(); Image.new('RGB', (32, 32), (200, 30, 60)).save(buf, 'WEBP', lossless=True); open(os.path.join(tmp, 'll_flat.webp'), 'wb').write(buf.getvalue()); cases.append(('ll_flat.webp', (0, 0)))
+
 fail = 0
 env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0')
 r = subprocess.run([exe, os.path.join(tmp, 'prog.jpg'), os.path.join(tmp, 'o.raw')], capture_output=True, text=True)

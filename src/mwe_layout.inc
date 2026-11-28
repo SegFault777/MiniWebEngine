@@ -3,13 +3,14 @@
  * layout state, measuring, block and inline layout, list markers.
  * Not a standalone translation unit: mwe.c includes the modules in dependency order (unity build). */
 /* ---- layout state and paint list ---- */
-typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov,z,sk,y0;char*t,*hp;N*nd,*on;}Cmd;
+typedef struct{int k,x,y,w,h,a,c,bg,fs,tf,u,n,hn,vs,ls,op,cl,bi,grp,ex,tsx,tsy,tsc,tov,z,sk,y0,ord;char*t,*hp;N*nd,*on;}Cmd;
 static Cmd*cm,dm;static int*zo,*zt;static char*zdone;   /* paint-order sort buffers */
 static int nc,W,H,cv=0xffffff;
 static int Y,pend,lx,lsx,cx,cw,LH,LA,LD,lf,ca,sp,lend,padp,tip;
 static Cmd*bulp;static S*curh;
 typedef struct{N*n,*par;int top,maxy;}Sk;   /* sticky boxes: top offset, bottom of the containing block */
 static Sk sks[64];static int nsk,cursk;
+static int tord;   /* running number of text runs, in layout order: selection works on (ord, byte offset) */
 static int curz,curz2,curctx;   /* stacking: key of the innermost positioned box (and of the one inside a stacking context) */
 static int curop=255,curcl=0,isol,fw=-1,fh=-1,fva,fch=-1,ng,ibA[64];
 typedef struct{int x,y,w,h,side;}Fl;static Fl flst[64];static int nf;
@@ -19,7 +20,7 @@ static N*curn;
 static Cmd*cadd(int k,int x,int y,int w,int h,int c){
  Cmd*p=nc<MC?&cm[nc++]:&dm;
  p->k=k;p->x=x;p->y=y;p->w=w;p->h=h;p->a=0;p->c=c;p->bg=-1;p->fs=16;p->tf=p->u=p->n=p->hn=p->vs=p->ls=p->bi=p->grp=p->ex=0;
- p->sk=cursk;p->z=curz*8192+curz2;p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
+ p->ord=k==1?++tord:0;p->sk=cursk;p->z=curz*8192+curz2;p->op=curop;p->cl=curcl;p->t=p->hp=0;p->nd=0;p->on=curn;return p;}
 static int rc(int c,St*s){return c==-3?s->col:c;}
 static void fbounds(int y,int h,int*l,int*r){
  int i;
@@ -419,8 +420,8 @@ static void blk_(N*n,int ax,int aw){
   int lst=s->lst,sz=s->fs*3/8,len_;char*tx;
   if(sz<4)sz=4;
   mt0(s,&as,&de);
-  if(lst>=4){tx=mktxt(n,lst,&len_);bulp=cadd(1,0,0,wid(tx,len_,s->fs,0,0),as+de,rc(s->col,s));bulp->t=tx;bulp->n=len_;}
-  else if(lst==1){bulp=cadd(1,0,0,wid("\xE2\x80\xA2",3,s->fs,0,0),as+de,rc(s->col,s));bulp->t=(char*)"\xE2\x80\xA2";bulp->n=3;}
+  if(lst>=4){tx=mktxt(n,lst,&len_);bulp=cadd(1,0,0,wid(tx,len_,s->fs,0,0),as+de,rc(s->col,s));bulp->t=tx;bulp->n=len_;bulp->ord=0;}
+  else if(lst==1){bulp=cadd(1,0,0,wid("\xE2\x80\xA2",3,s->fs,0,0),as+de,rc(s->col,s));bulp->t=(char*)"\xE2\x80\xA2";bulp->n=3;bulp->ord=0;}
   else if(lst==3){bulp=cadd(0,0,0,sz,sz,rc(s->col,s));bulp->a=as-s->fs/4+sz/2;}
   else{
    bulp=cadd(2,0,0,sz,sz,0);

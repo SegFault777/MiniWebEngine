@@ -391,3 +391,82 @@ static void svg_paint(N*svg,int x,int y,int w,int h){
   if(y+h<ky1)ky1=y+h;
   svkids(svg,m,st,0);
   kx0=sk0;kx1=sk1;ky0=sl0;ky1=sl1;}}
+
+/* ---- SVG as an image (<img src="x.svg">, CSS url(x.svg)): parsed like a tiny document, drawn once onto white and onto black
+ * (the difference gives the alpha channel), stored like any decoded image at its intrinsic size (width/height, else viewBox, else 300x150) ---- */
+static int svsniff(const unsigned char *d, int n) {
+    int i = 0, lim = n < 2048 ? n : 2048;
+    if (n >= 3 && d[0] == 0xEF && d[1] == 0xBB && d[2] == 0xBF) i = 3;
+    while (i < lim && (d[i] == ' ' || d[i] == '\t' || d[i] == '\r' || d[i] == '\n')) i++;
+    if (i >= lim || d[i] != '<') return 0;
+    for (; i + 4 <= lim; i++) if (d[i] == '<' && (d[i + 1] | 32) == 's' && (d[i + 2] | 32) == 'v' && (d[i + 3] | 32) == 'g' && (i + 4 >= lim || d[i + 4] == ' ' || d[i + 4] == '>' || d[i + 4] == '\n' || d[i + 4] == '\t')) return 1;
+    return 0;
+}
+static N *svfindroot(N *n, int depth) {
+    N *c, *r;
+    if (n->tag.n && seq(n->tag, "svg")) return n;
+    if (depth > 6) return 0;
+    for (c = n->kid; c; c = c->nx) if ((r = svfindroot(c, depth + 1))) return r;
+    return 0;
+}
+static int imsvg(int i, const unsigned char *d, int n) {
+    char *copy;
+    N *rt, *svg, *sroot = root;
+    S sttl = ttl;
+    int snss = nss, w, h, x, y;
+    double vw = 0, vh = 0, aw, ah;
+    unsigned *px = 0, *wh = 0, *bk = 0;
+    if (n < 8 || n > (1 << 21) || !svsniff(d, n)) return 0;
+    copy = (char *)mem_get((unsigned long)n + 1);
+    if (!copy) return 0;
+    {int k; for (k = 0; k < n; k++) copy[k] = (char)d[k]; copy[n] = 0;}
+    rt = parse(copy, n);                              /* nodes live in the page arena; the page's own document is restored below */
+    root = sroot; ttl = sttl; nss = snss;
+    svg = rt ? svfindroot(rt, 0) : 0;
+    if (!svg) { mem_rel(copy); return 0; }
+    {   /* intrinsic size */
+        S vb = getattr(svg, "viewbox");
+        if (vb.p) { const char *p = vb.p, *e = vb.p + vb.n; int ok; svnum(&p, e, &ok); svnum(&p, e, &ok); vw = svnum(&p, e, &ok); vh = svnum(&p, e, &ok); }
+        aw = svat(svg, "width", 0, 0); ah = svat(svg, "height", 0, 0);
+        if (aw <= 0 && ah <= 0) { aw = vw > 0 ? vw : 300; ah = vh > 0 ? vh : 150; }
+        else if (aw <= 0) aw = vw > 0 && vh > 0 ? ah * vw / vh : 300;
+        else if (ah <= 0) ah = vw > 0 && vh > 0 ? aw * vh / vw : 150;
+    }
+    if (aw > 2048) { ah = ah * 2048 / aw; aw = 2048; }
+    if (ah > 2048) { aw = aw * 2048 / ah; ah = 2048; }
+    w = (int)(aw + 0.5); h = (int)(ah + 0.5);
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if ((long long)w * h > IMGPIX - ipn) { mem_rel(copy); return 0; }
+    px = (unsigned *)mem_get((unsigned long)w * (unsigned long)h * 4UL);
+    wh = (unsigned *)mem_get((unsigned long)w * (unsigned long)h * 4UL);
+    bk = (unsigned *)mem_get((unsigned long)w * (unsigned long)h * 4UL);
+    if (!px || !wh || !bk) { mem_rel(px); mem_rel(wh); mem_rel(bk); mem_rel(copy); return 0; }
+    {   /* draw on white and on black with the paint state saved around it */
+        unsigned *spb = pb; int spst = pst, spx0 = px0, spy0 = py0, swx0 = wx0, swy0 = wy0, swx1 = wx1, swy1 = wy1, sk0 = kx0, sk1 = kx1, sl0 = ky0, sl1 = ky1, sg = gop;
+        int k;
+        for (k = 0; k < w * h; k++) { wh[k] = 0xFFFFFF; bk[k] = 0; }
+        tgt(wh, w, 0, 0, w, h); svg_paint(svg, 0, 0, w, h);
+        tgt(bk, w, 0, 0, w, h); svg_paint(svg, 0, 0, w, h);
+        pb = spb; pst = spst; px0 = spx0; py0 = spy0; wx0 = swx0; wy0 = swy0; wx1 = swx1; wy1 = swy1; kx0 = sk0; kx1 = sk1; ky0 = sl0; ky1 = sl1; gop = sg;
+    }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+        unsigned W = wh[y * w + x], B = bk[y * w + x];
+        int dr = (int)(W >> 16 & 255) - (int)(B >> 16 & 255), dg = (int)(W >> 8 & 255) - (int)(B >> 8 & 255), db = (int)(W & 255) - (int)(B & 255);
+        int dm = dr > dg ? dr : dg, a;
+        if (db > dm) dm = db;
+        a = 255 - dm;
+        if (a < 0) a = 0;
+        if (a == 0) px[y * w + x] = 0;
+        else {
+            int r = (int)(B >> 16 & 255) * 255 / a, g = (int)(B >> 8 & 255) * 255 / a, b = (int)(B & 255) * 255 / a;
+            if (r > 255) r = 255;
+            if (g > 255) g = 255;
+            if (b > 255) b = 255;
+            px[y * w + x] = ((unsigned)a << 24) | ((unsigned)r << 16) | ((unsigned)g << 8) | (unsigned)b;
+        }
+    }
+    mem_rel(wh); mem_rel(bk); mem_rel(copy);
+    ims[i].px = px; ims[i].w = w; ims[i].h = h; ims[i].st = 1; ipn += (long long)w * h;
+    return 1;
+}

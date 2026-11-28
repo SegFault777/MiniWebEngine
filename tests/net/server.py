@@ -46,6 +46,12 @@ fetch('/api').then(function(r){return r.json()}).then(function(j){document.getEl
 var ac=new AbortController();fetch('/hang',{signal:ac.signal}).catch(function(e){console.log('aborted:'+e.name)});setTimeout(function(){ac.abort()},50);
 </script></body></html>""")
             if p=="/await2.html":return self.send(200,b'''<html><body><script>fetch('/api').then(function(r){console.log('got '+r.status);});(async function(){console.log('A');var r=await fetch('/api');console.log('B '+r.status);})();</script></body></html>''')
+            if p=="/slowapi":time.sleep(1.2);return self.send(200,b'{"ok":1}',"application/json")
+            if p=="/await_ui.html":return self.send(200,b"""<html><head><title>await ui</title></head><body><p id=o>start</p><script>
+var ticks=0;var iv=setInterval(function(){ticks++;document.getElementById('o').textContent='tick '+ticks;},100);
+(async function(){var r=await fetch('/slowapi');var j=await r.json();clearInterval(iv);console.log('awaited ok='+j.ok+' ticks-during-wait='+(ticks>=8?'many':ticks));})();
+console.log('main script returned');
+</script></body></html>""")
             if p=="/await.html":return self.send(200,b"""<html><body><p id=o>waiting</p><script>
 (async function(){var r=await fetch('/api');var j=await r.json();document.getElementById('o').textContent='await:'+j.n;console.log('await done '+j.n);})();
 console.log('main script end');

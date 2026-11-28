@@ -125,7 +125,7 @@ static int rq_build(Rq*r,int si){
  ba(" HTTP/1.1\r\nHost: ");ba(r->host);
  if((r->tls&&r->port!=443)||(!r->tls&&r->port!=80)){ba(":");ba_int(r->port);}
  ba("\r\nUser-Agent: MiniBrowser/" MB_VERSION " MiniWebEngine/" MWE_VERSION "\r\nAccept: ");
- ba(r->w[0].kind==K_PAGE?"text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,*/*;q=0.5":r->w[0].kind==K_CSS?"text/css,*/*;q=0.1":r->w[0].kind==K_IMG?"image/png,image/jpeg,image/gif,image/bmp,*/*;q=0.5":"*/*");
+ ba(r->w[0].kind==K_PAGE?"text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,*/*;q=0.5":r->w[0].kind==K_CSS?"text/css,*/*;q=0.1":r->w[0].kind==K_IMG?"image/png,image/jpeg,image/gif,image/bmp,image/svg+xml,image/webp,*/*;q=0.5":"*/*");
  ba("\r\nAccept-Encoding: identity\r\nConnection: close\r\n");
  {char ck[4096],ph_[128],pp_[8];int hs_,cross=0;
   if(r->w[0].kind!=K_PAGE&&cur[0]){urlparts(cur,ph_,sizeof ph_,pp_,sizeof pp_,&hs_);cross=!samesite(ph_,r->host);}

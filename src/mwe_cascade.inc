@@ -130,7 +130,7 @@ static void gens(N*c,St*s){
   else if(tx&&c==focn){   /* being edited: the value with a caret at focpos (password: bullets) */
    int o=cpp,k=0,pw=seq(ty,"password"),cp;
    while(k<=va.n&&cpp<(int)sizeof cpool-24){
-    if(k==focpos)cpp+=put8(cpool+cpp,'|');
+    if(k==focpos&&!(fanc>=0&&fanc!=focpos))cpp+=put8(cpool+cpp,'|');
     if(k>=va.n)break;
     cp=u8d(va.p,va.n,&k);
     if(cpp<(int)sizeof cpool-8)cpp+=put8(cpool+cpp,pw?0x2022:cp);}
@@ -144,7 +144,7 @@ static void gens(N*c,St*s){
   N*t;S va={0,0};int o=cpp,k=0,cp;
   for(t=c->kid;t;t=t->nx)if(!t->tag.n&&!t->gen){va=t->txt;break;}
   while(k<=va.n&&cpp<(int)sizeof cpool-24){
-   if(k==focpos)cpp+=put8(cpool+cpp,'|');
+   if(k==focpos&&!(fanc>=0&&fanc!=focpos))cpp+=put8(cpool+cpp,'|');
    if(k>=va.n)break;
    cp=u8d(va.p,va.n,&k);
    if(cpp<(int)sizeof cpool-8)cpp+=put8(cpool+cpp,cp);}

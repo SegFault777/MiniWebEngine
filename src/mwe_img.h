@@ -2,7 +2,8 @@
 /* MiniWebEngine v0.7 image decoders (no dependencies): PNG (all colour types and bit depths, Adam7),
  * JPEG (baseline and extended sequential Huffman, 8-bit, grey/YCbCr, restart markers), GIF (first frame,
  * transparency, interlace) and BMP (1/4/8/24/32-bit uncompressed). Not supported: progressive JPEG,
- * arithmetic-coded JPEG, CMYK, RLE bitmaps, animation (the first GIF frame is shown), WebP, SVG.
+ * arithmetic-coded JPEG, CMYK, RLE bitmaps, animation (the first GIF / WebP frame is shown), lossy WebP (VP8), AVIF.
+ * v0.13: lossless WebP (VP8L, incl. alpha and the first frame of animations) is decoded bit-exactly.
  * Output pixels are 0xAARRGGBB (not premultiplied). Every size field of the input is range-checked;
  * decoding fails (returns 0) instead of reading or writing out of bounds. */
 #ifndef MWE_IMG_H
@@ -610,13 +611,400 @@ static int mi_jpg(const mu8 *d, int n, unsigned *out, int W, int H) {
 
 /* ---------------------------------------------------------------- front end */
 /* 1 PNG, 2 JPEG, 3 GIF, 4 BMP; 0 = unknown/unsupported. Fills *w,*h. */
+static int memcmp_mi(const mu8 *a, const char *b, int n) { int i; for (i = 0; i < n; i++) if (a[i] != (mu8)b[i]) return 1; return 0; }
+/* ---------------------------------------------------------------- WebP (v0.13): lossless VP8L, RIFF container, alpha, first frame of animations */
+typedef struct { const mu8 *d; int n, pos, bits, eos; unsigned long long v; } MWb;      /* LSB-first bit reader */
+static void mw_fill(MWb *b) { while (b->bits <= 56) { if (b->pos < b->n) b->v |= (unsigned long long)b->d[b->pos++] << b->bits; else if (b->bits == 0 && b->pos >= b->n) { b->eos = 1; } b->bits += 8; if (b->pos >= b->n && b->bits > 56) break; } }
+static unsigned mw_get(MWb *b, int k) {
+    unsigned r;
+    if (k == 0) return 0;
+    if (b->bits < k) mw_fill(b);
+    r = (unsigned)(b->v & ((1ULL << k) - 1));
+    b->v >>= k; b->bits -= k;
+    if (b->bits < 0) { b->eos = 1; b->bits = 0; }
+    return r;
+}
+typedef struct { unsigned short *sym; unsigned short cnt[16], look[256]; int n, single, ok; } MHuf;
+/* canonical Huffman code from code lengths; codes are read MSB-first of the code, packed LSB-first like deflate */
+static int mw_huf(MHuf *h, const mu8 *len, int n, unsigned short *symbuf) {
+    int i, l, nz = 0, last = 0, left = 1;
+    unsigned short offs[16];
+    unsigned code = 0;
+    h->sym = symbuf; h->n = n; h->single = 0; h->ok = 0;
+    for (l = 0; l < 16; l++) h->cnt[l] = 0;
+    for (i = 0; i < n; i++) if (len[i]) { h->cnt[len[i]]++; nz++; last = i; }
+    for (i = 0; i < 256; i++) h->look[i] = 0;
+    if (nz == 0) return 0;
+    if (nz == 1) { h->single = 1; h->sym[0] = (unsigned short)last; h->ok = 1; return 1; }   /* a single symbol takes 0 bits */
+    for (l = 1; l < 16; l++) { left <<= 1; left -= h->cnt[l]; if (left < 0) return 0; }
+    if (left != 0) return 0;                                                                   /* must be complete */
+    offs[1] = 0;
+    for (l = 1; l < 15; l++) offs[l + 1] = (unsigned short)(offs[l] + h->cnt[l]);
+    for (i = 0; i < n; i++) if (len[i]) h->sym[offs[len[i]]++] = (unsigned short)i;
+    code = 0;
+    {   /* 8-bit lookup for codes up to 8 bits long */
+        unsigned c[16]; int base[16], k;
+        code = 0; k = 0;
+        for (l = 1; l < 16; l++) { c[l] = code; base[l] = k; code = (code + h->cnt[l]) << 1; k += h->cnt[l]; }
+        for (l = 1; l <= 8; l++) {
+            int j;
+            for (j = 0; j < h->cnt[l]; j++) {
+                unsigned cd = c[l] + (unsigned)j, r = 0, t;
+                int q;
+                for (q = 0; q < l; q++) r |= ((cd >> q) & 1u) << (l - 1 - q);
+                for (t = r; t < 256; t += 1u << l) h->look[t] = (unsigned short)((h->sym[base[l] + j] << 4) | l);
+            }
+        }
+    }
+    h->ok = 1;
+    return 1;
+}
+static int mw_sym(MWb *b, const MHuf *h) {
+    int l, first = 0, index = 0, code = 0;
+    unsigned e;
+    if (h->single) return h->sym[0];
+    if (b->bits < 15) mw_fill(b);
+    e = h->look[b->v & 255];
+    if (e) { l = e & 15; b->v >>= l; b->bits -= l; return e >> 4; }
+    for (l = 1; l < 16; l++) {
+        code |= (int)(b->v & 1); b->v >>= 1; b->bits--;
+        if (code - h->cnt[l] < first) return h->sym[index + (code - first)];
+        index += h->cnt[l]; first += h->cnt[l]; first <<= 1; code <<= 1;
+    }
+    b->eos = 1;
+    return 0;
+}
+static const mu8 mw_clo[19] = { 17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+static const signed char mw_dm[120][2] = {
+    {0,1},{1,0},{1,1},{-1,1},{0,2},{2,0},{1,2},{-1,2},{2,1},{-2,1},{2,2},{-2,2},{0,3},{3,0},{1,3},{-1,3},{3,1},{-3,1},{2,3},{-2,3},
+    {3,2},{-3,2},{0,4},{4,0},{1,4},{-1,4},{4,1},{-4,1},{3,3},{-3,3},{2,4},{-2,4},{4,2},{-4,2},{0,5},{3,4},{-3,4},{4,3},{-4,3},{5,0},
+    {1,5},{-1,5},{5,1},{-5,1},{2,5},{-2,5},{5,2},{-5,2},{4,4},{-4,4},{3,5},{-3,5},{5,3},{-5,3},{0,6},{6,0},{1,6},{-1,6},{6,1},{-6,1},
+    {2,6},{-2,6},{6,2},{-6,2},{4,5},{-4,5},{5,4},{-5,4},{3,6},{-3,6},{6,3},{-6,3},{0,7},{7,0},{1,7},{-1,7},{5,5},{-5,5},{7,1},{-7,1},
+    {4,6},{-4,6},{6,4},{-6,4},{2,7},{-2,7},{7,2},{-7,2},{3,7},{-3,7},{7,3},{-7,3},{5,6},{-5,6},{6,5},{-6,5},{8,0},{4,7},{-4,7},{7,4},
+    {-7,4},{8,1},{8,2},{6,6},{-6,6},{8,3},{5,7},{-5,7},{7,5},{-7,5},{8,4},{6,7},{-6,7},{7,6},{-7,6},{8,5},{7,7},{-7,7},{8,6},{8,7} };
+
+/* read one prefix code (simple or normal); alphabet size n; symbuf must hold n entries */
+static int mw_readcode(MWb *b, MHuf *h, int n, unsigned short *symbuf, mu8 *len) {
+    int i;
+    for (i = 0; i < n; i++) len[i] = 0;
+    if (mw_get(b, 1)) {                               /* simple code: 1 or 2 symbols of length 1 */
+        int ns = (int)mw_get(b, 1) + 1, first8 = (int)mw_get(b, 1);
+        int s0 = (int)mw_get(b, first8 ? 8 : 1);
+        if (s0 >= n) return 0;
+        len[s0] = 1;
+        if (ns == 2) { int s1 = (int)mw_get(b, 8); if (s1 >= n) return 0; len[s1] = 1; }
+        if (ns == 1) { h->sym = symbuf; h->n = n; h->single = 1; h->sym[0] = (unsigned short)s0; h->ok = 1; for (i = 0; i < 16; i++) h->cnt[i] = 0; for (i = 0; i < 256; i++) h->look[i] = 0; return 1; }
+        return mw_huf(h, len, n, symbuf);
+    } else {
+        mu8 cl[19];
+        unsigned short cs[19];
+        MHuf ch;
+        int ncl = (int)mw_get(b, 4) + 4, maxsym, sym = 0, prev = 8;
+        for (i = 0; i < 19; i++) cl[i] = 0;
+        if (ncl > 19) return 0;
+        for (i = 0; i < ncl; i++) cl[mw_clo[i]] = (mu8)mw_get(b, 3);
+        if (!mw_huf(&ch, cl, 19, cs)) return 0;
+        if (mw_get(b, 1)) { int nb = 2 + 2 * (int)mw_get(b, 3); maxsym = 2 + (int)mw_get(b, nb); }
+        else maxsym = n;
+        if (maxsym > n) return 0;
+        while (sym < n) {
+            int c;
+            if (maxsym-- == 0) break;
+            c = mw_sym(b, &ch);
+            if (b->eos) return 0;
+            if (c < 16) { len[sym++] = (mu8)c; if (c) prev = c; }
+            else {
+                int rep, val = 0;
+                if (c == 16) { rep = 3 + (int)mw_get(b, 2); val = prev; }
+                else if (c == 17) rep = 3 + (int)mw_get(b, 3);
+                else rep = 11 + (int)mw_get(b, 7);
+                if (sym + rep > n) return 0;
+                while (rep--) len[sym++] = (mu8)val;
+            }
+        }
+        return mw_huf(h, len, n, symbuf);
+    }
+}
+typedef struct { MHuf h[5]; } MGrp;
+static int mw_prefix(int sym, MWb *b) {                 /* length / distance prefix coding */
+    int eb, off;
+    if (sym < 4) return sym + 1;
+    eb = (sym - 2) >> 1; off = (2 + (sym & 1)) << eb;
+    return off + (int)mw_get(b, eb) + 1;
+}
+static unsigned mw_hash(unsigned c, int bits) { return (c * 0x1e35a7bdu) >> (32 - bits); }
+/* an entropy-coded image of xs*ys pixels into out; level0: the main image (meta prefix codes allowed) */
+static int mw_image(MWb *b, int xs, int ys, int level0, unsigned *out) {
+    int cbits = 0, mbits = 0, ngrp = 1, i, g, x = 0, y = 0, mxs = 0, tot = xs * ys, pos = 0, ok = 0;
+    unsigned *meta = 0, *cache = 0;
+    MGrp *grp = 0;
+    unsigned short *symmem = 0;
+    mu8 *lenbuf = 0;
+    int gsz[5], cache_n;
+    if (mw_get(b, 1)) { cbits = (int)mw_get(b, 4); if (cbits < 1 || cbits > 11) return 0; }
+    if (level0 && mw_get(b, 1)) {
+        int mys, mx, my, maxg = 0;
+        mbits = (int)mw_get(b, 3) + 2;
+        mxs = (xs + (1 << mbits) - 1) >> mbits; mys = (ys + (1 << mbits) - 1) >> mbits;
+        meta = (unsigned *)MI_ALLOC((long long)mxs * mys * 4);
+        if (!meta) return 0;
+        if (!mw_image(b, mxs, mys, 0, meta)) { MI_FREE(meta); return 0; }
+        for (my = 0; my < mys; my++) for (mx = 0; mx < mxs; mx++) { unsigned gi = (meta[my * mxs + mx] >> 8) & 0xffff; if ((int)gi > maxg) maxg = (int)gi; }
+        ngrp = maxg + 1;
+        if (ngrp > 1024) { MI_FREE(meta); return 0; }
+    }
+    cache_n = cbits ? 1 << cbits : 0;
+    gsz[0] = 256 + 24 + cache_n; gsz[1] = gsz[2] = gsz[3] = 256; gsz[4] = 40;
+    grp = (MGrp *)MI_ALLOC((long long)ngrp * sizeof(MGrp));
+    symmem = (unsigned short *)MI_ALLOC((long long)ngrp * (gsz[0] + 256 * 3 + 40) * 2);
+    lenbuf = (mu8 *)MI_ALLOC(gsz[0]);
+    if (cbits) cache = (unsigned *)MI_ALLOC((long long)cache_n * 4);
+    if (!grp || !symmem || !lenbuf || (cbits && !cache)) goto done;
+    {
+        unsigned short *sp = symmem;
+        for (g = 0; g < ngrp; g++) for (i = 0; i < 5; i++) {
+            if (!mw_readcode(b, &grp[g].h[i], gsz[i], sp, lenbuf) || b->eos) goto done;
+            sp += gsz[i];
+        }
+    }
+    {
+        MGrp *cur = mbits ? &grp[(meta[0] >> 8) & 0xffff] : &grp[0];
+        while (pos < tot) {
+            int s;
+            s = mw_sym(b, &cur->h[0]);
+            if (b->eos) goto done;
+            if (s < 256) {
+                unsigned r = (unsigned)mw_sym(b, &cur->h[1]), bl = (unsigned)mw_sym(b, &cur->h[2]), a = (unsigned)mw_sym(b, &cur->h[3]);
+                unsigned px = (a << 24) | (r << 16) | ((unsigned)s << 8) | bl;
+                out[pos++] = px;
+                if (cbits) cache[mw_hash(px, cbits)] = px;
+                if (++x == xs) { x = 0; y++; }
+            } else if (s < 280) {
+                int len = mw_prefix(s - 256, b), ds = mw_sym(b, &cur->h[4]), dc, dist, k;
+                dc = mw_prefix(ds, b);
+                if (dc > 120) dist = dc - 120;
+                else { dist = mw_dm[dc - 1][0] + mw_dm[dc - 1][1] * xs; if (dist < 1) dist = 1; }
+                if (b->eos || dist > pos || pos + len > tot) goto done;
+                for (k = 0; k < len; k++) {
+                    unsigned px = out[pos - dist];
+                    out[pos++] = px;
+                    if (cbits) cache[mw_hash(px, cbits)] = px;
+                    if (++x == xs) { x = 0; y++; }
+                    if (mbits && k + 1 < len && ((x & ((1 << mbits) - 1)) == 0)) { /* group may change in the middle of a copy: only matters for the next symbol */ }
+                }
+            } else {
+                int ci = s - 280;
+                unsigned px;
+                if (!cbits || ci >= cache_n) goto done;
+                px = cache[ci];
+                out[pos++] = px;
+                cache[mw_hash(px, cbits)] = px;
+                if (++x == xs) { x = 0; y++; }
+            }
+            if (mbits && x < xs && y < ys) cur = &grp[(meta[(y >> mbits) * mxs + (x >> mbits)] >> 8) & 0xffff];
+        }
+        ok = 1;
+    }
+done:
+    MI_FREE(grp); MI_FREE(symmem); MI_FREE(lenbuf); MI_FREE(cache); MI_FREE(meta);
+    return ok;
+}
+static int mw_clip(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+static unsigned mw_avg2(unsigned a, unsigned b) { return (((a ^ b) & 0xfefefefeu) >> 1) + (a & b); }
+static unsigned mw_pred(int mode, unsigned L, unsigned T, unsigned TR, unsigned TL) {
+    switch (mode) {
+    case 0: return 0xff000000u;
+    case 1: return L;
+    case 2: return T;
+    case 3: return TR;
+    case 4: return TL;
+    case 5: return mw_avg2(mw_avg2(L, TR), T);
+    case 6: return mw_avg2(L, TL);
+    case 7: return mw_avg2(L, T);
+    case 8: return mw_avg2(TL, T);
+    case 9: return mw_avg2(T, TR);
+    case 10: return mw_avg2(mw_avg2(L, TL), mw_avg2(T, TR));
+    case 11: {
+        int pl = 0, pt = 0, c;
+        for (c = 0; c < 32; c += 8) {
+            int l = (int)(L >> c & 255), t = (int)(T >> c & 255), tl = (int)(TL >> c & 255), p = l + t - tl;
+            pl += p > l ? p - l : l - p; pt += p > t ? p - t : t - p;
+        }
+        return pl < pt ? L : T; }
+    case 12: {
+        unsigned r = 0; int c;
+        for (c = 0; c < 32; c += 8) r |= (unsigned)mw_clip((int)(L >> c & 255) + (int)(T >> c & 255) - (int)(TL >> c & 255)) << c;
+        return r; }
+    case 13: {
+        unsigned a = mw_avg2(L, T), r = 0; int c;
+        for (c = 0; c < 32; c += 8) { int av = (int)(a >> c & 255), tl = (int)(TL >> c & 255); r |= (unsigned)mw_clip(av + (av - tl) / 2) << c; }
+        return r; }
+    }
+    return 0xff000000u;
+}
+static unsigned mw_addpx(unsigned a, unsigned b) { return (((a & 0xff00ff00u) + (b & 0xff00ff00u)) & 0xff00ff00u) | (((a & 0x00ff00ffu) + (b & 0x00ff00ffu)) & 0x00ff00ffu); }
+/* VP8L image stream: 5-byte header already checked; decodes W*H into out (0xAARRGGBB) */
+static int mw_vp8l(const mu8 *d, int n, unsigned *out, int W, int H, int *hasalpha) {
+    MWb b;
+    int type[4], tbits[4], twd[4], tpk[4], nt = 0, xs = W, t, ok = 0, x, y, wbits = 0, ctsz = 0;
+    unsigned *tdata[4] = {0, 0, 0, 0}, *ctab = 0, *packed = 0, used = 0;
+    b.d = d; b.n = n; b.pos = 0; b.bits = 0; b.eos = 0; b.v = 0;
+    if (n < 5 || d[0] != 0x2f) return 0;
+    b.pos = 1;
+    if ((int)mw_get(&b, 14) + 1 != W || (int)mw_get(&b, 14) + 1 != H) return 0;
+    *hasalpha = (int)mw_get(&b, 1);
+    if (mw_get(&b, 3) != 0) return 0;
+    while (mw_get(&b, 1)) {
+        int tt = (int)mw_get(&b, 2);
+        if (nt >= 4 || (used >> tt & 1)) goto done;
+        used |= 1u << tt; type[nt] = tt; tbits[nt] = 0; twd[nt] = xs; tpk[nt] = wbits != 0;   /* xs: the width this transform sees (smaller after colour indexing) */
+        if (tt == 0 || tt == 1) {
+            int bits = (int)mw_get(&b, 3) + 2, bw = (xs + (1 << bits) - 1) >> bits, bh = (H + (1 << bits) - 1) >> bits;
+            tbits[nt] = bits;
+            tdata[nt] = (unsigned *)MI_ALLOC((long long)bw * bh * 4);
+            if (!tdata[nt] || !mw_image(&b, bw, bh, 0, tdata[nt])) goto done;
+        } else if (tt == 3) {
+            int k;
+            ctsz = (int)mw_get(&b, 8) + 1;
+            ctab = (unsigned *)MI_ALLOC(256 * 4);
+            if (!ctab || !mw_image(&b, ctsz, 1, 0, ctab)) goto done;
+            for (k = 1; k < ctsz; k++) ctab[k] = mw_addpx(ctab[k], ctab[k - 1]);
+            wbits = ctsz <= 2 ? 3 : ctsz <= 4 ? 2 : ctsz <= 16 ? 1 : 0;
+            xs = (W + (1 << wbits) - 1) >> wbits;
+            tbits[nt] = wbits;
+        }
+        nt++;
+    }
+    if (wbits) { packed = (unsigned *)MI_ALLOC((long long)xs * H * 4); if (!packed) goto done; if (!mw_image(&b, xs, H, 1, packed)) goto done; }
+    else if (!mw_image(&b, xs, H, 1, out)) goto done;
+    /* inverse transforms, last one first */
+    for (t = nt - 1; t >= 0; t--) {
+        if (type[t] == 3) {
+            const unsigned *src = wbits ? packed : out;
+            int bpp = 8 >> wbits, mask = (1 << bpp) - 1;
+            for (y = H - 1; y >= 0; y--) for (x = W - 1; x >= 0; x--) {
+                unsigned pk = src[y * xs + (x >> wbits)];
+                int idx = wbits ? (int)(pk >> 8 >> ((x & ((1 << wbits) - 1)) * bpp)) & mask : (int)(pk >> 8 & 255);
+                out[y * W + x] = idx < ctsz ? ctab[idx] : 0;
+            }
+        } else {
+            unsigned *buf = tpk[t] ? packed : out;   /* transforms read after colour indexing work on the packed image */
+            int tw = twd[t], bits = tbits[t], bw = (tw + (1 << bits) - 1) >> bits;
+            if (type[t] == 2) {
+                for (x = 0; x < tw * H; x++) { unsigned p = buf[x], g = p >> 8 & 255; buf[x] = (p & 0xff00ff00u) | ((((p >> 16 & 255) + g) & 255) << 16) | (((p & 255) + g) & 255); }
+            } else if (type[t] == 1) {
+                for (y = 0; y < H; y++) for (x = 0; x < tw; x++) {
+                    unsigned e = tdata[t][(y >> bits) * bw + (x >> bits)], p = buf[y * tw + x];
+                    int gr = (signed char)(e & 255), gb = (signed char)(e >> 8 & 255), rb = (signed char)(e >> 16 & 255);   /* green_to_red in B, green_to_blue in G, red_to_blue in R */
+                    int green = (int)(p >> 8 & 255), red = (int)(p >> 16 & 255), blue = (int)(p & 255);
+                    red = (red + ((gr * (signed char)green) >> 5)) & 255;
+                    blue = (blue + ((gb * (signed char)green) >> 5)) & 255;
+                    blue = (blue + ((rb * (signed char)red) >> 5)) & 255;
+                    buf[y * tw + x] = (p & 0xff00ff00u) | ((unsigned)red << 16) | (unsigned)blue;
+                }
+            } else {
+                for (y = 0; y < H; y++) for (x = 0; x < tw; x++) {
+                    unsigned pr;
+                    int i = y * tw + x;
+                    if (y == 0 && x == 0) pr = 0xff000000u;
+                    else if (y == 0) pr = buf[i - 1];
+                    else if (x == 0) pr = buf[i - tw];
+                    else pr = mw_pred((int)(tdata[t][(y >> bits) * bw + (x >> bits)] >> 8 & 15), buf[i - 1], buf[i - tw], buf[i - tw + 1], buf[i - tw - 1]);
+                    buf[i] = mw_addpx(buf[i], pr);
+                }
+            }
+        }
+    }
+    ok = 1;
+done:
+    for (t = 0; t < 4; t++) MI_FREE(tdata[t]);
+    MI_FREE(ctab); MI_FREE(packed);
+    return ok;
+}
+/* RIFF container: finds the main image. kind: 1 lossless VP8L, 2 lossy VP8. Fills the chunk position and canvas size; alpha chunk for lossy. */
+typedef struct { int kind, w, h, off, len, aoff, alen, fx, fy, canvas_w, canvas_h, hasalpha; } MWi;
+static int mw_scan(const mu8 *d, int n, MWi *wi) {
+    int p = 12, vp8x = 0;
+    if (n < 20 || d[0] != 'R' || d[1] != 'I' || d[2] != 'F' || d[3] != 'F' || d[8] != 'W' || d[9] != 'E' || d[10] != 'B' || d[11] != 'P') return 0;
+    wi->kind = 0; wi->aoff = wi->alen = 0; wi->fx = wi->fy = 0; wi->canvas_w = wi->canvas_h = 0; wi->hasalpha = 0;
+    while (p + 8 <= n) {
+        int sz = mi_le32(d + p + 4), body = p + 8;
+        if (sz < 0 || body + sz > n) { if (sz < 0 || body > n) return 0; sz = n - body; }
+        if (!memcmp_mi(d + p, "VP8X", 4) && sz >= 10) { vp8x = 1; wi->hasalpha = d[body] >> 4 & 1; wi->canvas_w = ((int)d[body + 4] | (int)d[body + 5] << 8 | (int)d[body + 6] << 16) + 1; wi->canvas_h = ((int)d[body + 7] | (int)d[body + 8] << 8 | (int)d[body + 9] << 16) + 1; }
+        else if (!memcmp_mi(d + p, "ALPH", 4)) { wi->aoff = body; wi->alen = sz; }
+        else if (!memcmp_mi(d + p, "VP8L", 4) && sz >= 5 && d[body] == 0x2f) {
+            wi->kind = 1; wi->off = body; wi->len = sz;
+            wi->w = (d[body + 1] | (d[body + 2] & 0x3f) << 8) + 1;
+            wi->h = ((d[body + 2] >> 6) | d[body + 3] << 2 | (d[body + 4] & 0xf) << 10) + 1;
+            return 1;
+        } else if (!memcmp_mi(d + p, "VP8 ", 4) && sz >= 10) {
+            wi->kind = 2; wi->off = body; wi->len = sz;
+            wi->w = (d[body + 6] | d[body + 7] << 8) & 0x3fff; wi->h = (d[body + 8] | d[body + 9] << 8) & 0x3fff;
+            return wi->w > 0 && wi->h > 0;
+        } else if (!memcmp_mi(d + p, "ANMF", 4) && sz >= 24) {   /* animation: the first frame, placed on the canvas */
+            wi->fx = 2 * ((int)d[body] | (int)d[body + 1] << 8 | (int)d[body + 2] << 16);
+            wi->fy = 2 * ((int)d[body + 3] | (int)d[body + 4] << 8 | (int)d[body + 5] << 16);
+            {   /* its image chunks follow the 16-byte frame header */
+                int q = body + 16, qe = body + sz;
+                wi->aoff = wi->alen = 0;
+                while (q + 8 <= qe) {
+                    int s2 = mi_le32(d + q + 4), b2 = q + 8;
+                    if (s2 < 0 || b2 + s2 > qe) return 0;
+                    if (!memcmp_mi(d + q, "ALPH", 4)) { wi->aoff = b2; wi->alen = s2; }
+                    else if (!memcmp_mi(d + q, "VP8L", 4) && s2 >= 5 && d[b2] == 0x2f) { wi->kind = 1; wi->off = b2; wi->len = s2; wi->w = (d[b2 + 1] | (d[b2 + 2] & 0x3f) << 8) + 1; wi->h = ((d[b2 + 2] >> 6) | d[b2 + 3] << 2 | (d[b2 + 4] & 0xf) << 10) + 1; return 1; }
+                    else if (!memcmp_mi(d + q, "VP8 ", 4) && s2 >= 10) { wi->kind = 2; wi->off = b2; wi->len = s2; wi->w = (d[b2 + 6] | d[b2 + 7] << 8) & 0x3fff; wi->h = (d[b2 + 8] | d[b2 + 9] << 8) & 0x3fff; return wi->w > 0 && wi->h > 0; }
+                    q = b2 + s2 + (s2 & 1);
+                }
+            }
+            return 0;
+        }
+        p = body + sz + (sz & 1);
+    }
+    (void)vp8x;
+    return 0;
+}
+static int mi_webp_ok(const MWi *wi) { return wi->kind == 1; }   /* lossy (VP8) is added by the next section */
+static int mi_webp_dims(const mu8 *d, int n, int *w, int *h) {
+    MWi wi;
+    if (!mw_scan(d, n, &wi) || !mi_webp_ok(&wi)) return 0;
+    *w = wi.canvas_w > 0 ? wi.canvas_w : wi.w; *h = wi.canvas_h > 0 ? wi.canvas_h : wi.h;
+    return *w > 0 && *h > 0 && *w <= MI_MAXDIM && *h <= MI_MAXDIM;
+}
+static int mi_webp(const mu8 *d, int n, unsigned *out, int W, int H);
 static int mi_probe(const mu8 *d, int n, int *w, int *h) {
     int dummy, dd, ct, il, prog;
     if (n >= 8 && d[0] == 137 && d[1] == 'P') return mi_png_hdr(d, n, w, h, &dd, &ct, &il) ? 1 : 0;
     if (n >= 3 && d[0] == 0xFF && d[1] == 0xD8) { if (!mi_jpg_hdr(d, n, w, h, &prog) || prog) return 0; return 2; }
     if (n >= 6 && d[0] == 'G' && d[1] == 'I' && d[2] == 'F') return mi_gif_hdr(d, n, w, h) ? 3 : 0;
     if (n >= 2 && d[0] == 'B' && d[1] == 'M') return mi_bmp_hdr(d, n, w, h) ? 4 : 0;
+    if (n >= 12 && d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F') return mi_webp_dims(d, n, w, h) ? 5 : 0;
     (void)dummy;
+    return 0;
+}
+static int mi_webp(const mu8 *d, int n, unsigned *out, int W, int H) {
+    MWi wi;
+    int ha = 1, ok = 0, k, x, y;
+    if (!mw_scan(d, n, &wi) || !mi_webp_ok(&wi)) return 0;
+    if (wi.kind == 1) {
+        if (wi.w == W && wi.h == H && !wi.fx && !wi.fy) {
+            ok = mw_vp8l(d + wi.off, wi.len, out, W, H, &ha);
+            if (ok && !ha) for (k = 0; k < W * H; k++) out[k] |= 0xff000000u;
+            return ok;
+        } else {                                        /* a frame inside a larger canvas (animation: first frame) */
+            unsigned *tmp = (unsigned *)MI_ALLOC((long long)wi.w * wi.h * 4);
+            if (!tmp) return 0;
+            ok = mw_vp8l(d + wi.off, wi.len, tmp, wi.w, wi.h, &ha);
+            if (ok) {
+                for (k = 0; k < W * H; k++) out[k] = 0;
+                for (y = 0; y < wi.h; y++) for (x = 0; x < wi.w; x++) {
+                    int ox = x + wi.fx, oy = y + wi.fy;
+                    if (ox < W && oy < H) out[oy * W + ox] = ha ? tmp[y * wi.w + x] : tmp[y * wi.w + x] | 0xff000000u;
+                }
+            }
+            MI_FREE(tmp);
+            return ok;
+        }
+    }
     return 0;
 }
 static int mi_decode(int fmt, const mu8 *d, int n, unsigned *out, int w, int h) {
@@ -627,6 +1015,7 @@ static int mi_decode(int fmt, const mu8 *d, int n, unsigned *out, int w, int h) 
     case 2: r = mi_jpg(d, n, out, w, h); break;
     case 3: r = mi_gif(d, n, out, w, h); break;
     case 4: r = mi_bmp(d, n, out, w, h); break;
+    case 5: r = mi_webp(d, n, out, w, h); break;
     }
     if (mi_scr) { MI_FREE(mi_scr); mi_scr = 0; }
     return r;

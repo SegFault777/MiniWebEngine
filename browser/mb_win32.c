@@ -161,17 +161,26 @@ static void mkdib(int w,int h){
  old=(HBITMAP)SelectObject(mem,dib);
  pw=w;phh=h;
  mb_resize(w,h);}
-static void paste(void){
- HANDLE h;WCHAR *w;char u[2048];int n;
- if(!OpenClipboard(hw))return;
+/* clipboard (UTF-8 <-> UTF-16). NOTE: not compiled or run in the development environment (no Windows toolchain). */
+void mb_plat_clipboard_set(const char *u, int n){
+ HGLOBAL g;WCHAR *w;int wn;
+ if(n<=0||!OpenClipboard(hw))return;
+ wn=MultiByteToWideChar(CP_UTF8,0,u,n,NULL,0);
+ g=GlobalAlloc(GMEM_MOVEABLE,(SIZE_T)(wn+1)*sizeof(WCHAR));
+ if(g){
+  w=(WCHAR*)GlobalLock(g);
+  if(w){MultiByteToWideChar(CP_UTF8,0,u,n,w,wn);w[wn]=0;GlobalUnlock(g);EmptyClipboard();if(!SetClipboardData(CF_UNICODETEXT,g))GlobalFree(g);}
+  else GlobalFree(g);}
+ CloseClipboard();}
+int mb_plat_clipboard_get(char *buf, int cap){
+ HANDLE h;WCHAR *w;int n=0;
+ if(!OpenClipboard(hw))return 0;
  h=GetClipboardData(CF_UNICODETEXT);
  if(h){
   w=(WCHAR*)GlobalLock(h);
-  if(w){
-   n=WideCharToMultiByte(CP_UTF8,0,w,-1,u,(int)sizeof u,NULL,NULL);
-   if(n>1)mb_paste(u,n-1);
-   GlobalUnlock(h);}}
- CloseClipboard();}
+  if(w){n=WideCharToMultiByte(CP_UTF8,0,w,-1,buf,cap,NULL,NULL);if(n>0)n--;else n=0;GlobalUnlock(h);}}
+ CloseClipboard();
+ return n;}
 static int vk2k(WPARAM v){
  switch(v){
   case VK_BACK:return MBK_BACKSPACE;case VK_DELETE:return MBK_DELETE;case VK_RETURN:return MBK_ENTER;
@@ -194,8 +203,14 @@ static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){
    return 0;}
   case WM_ERASEBKGND:return 1;
   case WM_TIMER:if(mb_tick())inval();return 0;
-  case WM_LBUTTONDOWN:mb_click((short)LOWORD(l),(short)HIWORD(l));inval();return 0;
-  case WM_MOUSEMOVE:mb_move((short)LOWORD(l),(short)HIWORD(l));inval();return 0;
+  case WM_LBUTTONDOWN:{   /* single / double / triple click by time and distance */
+   static DWORD lt;static int lx,ly,nclk;
+   int x=(short)LOWORD(l),y=(short)HIWORD(l);DWORD t=GetMessageTime();
+   if(nclk>0&&(DWORD)(t-lt)<=GetDoubleClickTime()&&x-lx<=4&&lx-x<=4&&y-ly<=4&&ly-y<=4)nclk=nclk%3+1;else nclk=1;
+   lt=t;lx=x;ly=y;
+   SetCapture(h);mb_mouse_down(x,y,nclk);inval();return 0;}
+  case WM_LBUTTONUP:ReleaseCapture();mb_mouse_up((short)LOWORD(l),(short)HIWORD(l));inval();return 0;
+  case WM_MOUSEMOVE:mb_move((short)LOWORD(l),(short)HIWORD(l));if(w&MK_LBUTTON)mb_mouse_drag((short)LOWORD(l),(short)HIWORD(l));inval();return 0;
   case WM_MOUSEWHEEL:mb_wheel((short)HIWORD(w)/WHEEL_DELTA);inval();return 0;
   case WM_SETCURSOR:
    if(LOWORD(l)==HTCLIENT){SetCursor(LoadCursor(NULL,hand?IDC_HAND:IDC_ARROW));return TRUE;}
@@ -208,10 +223,13 @@ static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){
    return 0;
   case WM_KEYDOWN:
    if(GetKeyState(VK_CONTROL)&0x8000){
-    if(w=='L')mb_key(MBK_FOCUS_URL);else if(w=='R')mb_key(MBK_F5);else if(w=='V')paste();
+    int sh=(GetKeyState(VK_SHIFT)&0x8000)?MBMOD_SHIFT:0;
+    if(w=='R')mb_key(MBK_F5);
+    else if(w=='A'||w=='C'||w=='X'||w=='V'||w=='L')mb_key_ex((int)w+32,MBMOD_CTRL);
+    else if((k=vk2k(w))!=0)mb_key_ex(k,MBMOD_CTRL|sh);
     inval();return 0;}
    k=vk2k(w);
-   if(k){mb_key(k);inval();}
+   if(k){mb_key_ex(k,(GetKeyState(VK_SHIFT)&0x8000)?MBMOD_SHIFT:0);inval();}
    return 0;
   case WM_SYSKEYDOWN:
    if(w==VK_LEFT){mb_key(MBK_BACK);inval();return 0;}

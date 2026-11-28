@@ -40,6 +40,6 @@ typedef struct{
  S cont;
 }St;
 typedef struct N N;
-static N*focn;static int focpos;   /* focused form control and caret (byte offset into its value) */
+static N*focn;static int focpos,fanc=-1;   /* fanc: selection anchor in the focused field (-1 none) */   /* focused form control and caret (byte offset into its value) */
 struct N{N*par,*kid,*last,*nx,*pv,*lel;S tag,txt,id,cls,sty,href,at;St*s;int det,gen,x0,y0,x1,y1;void*jw;};
 static int imfor(N*n);
